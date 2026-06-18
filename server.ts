@@ -42,10 +42,16 @@ app.use(express.urlencoded({ extended: true }));
 
 // Helper function to search or create the Google Drive folder "AI 회의록 자동화"
 async function getOrCreateFolder(accessToken: string): Promise<string | null> {
-  const folderName = "AI 회의록 자동화";
+  // If an administrator configured a static shared drive or folder ID, use it directly!
+  if (process.env.SHARED_DRIVE_FOLDER_ID) {
+    console.log(`Using configured shared drive folder ID: ${process.env.SHARED_DRIVE_FOLDER_ID}`);
+    return process.env.SHARED_DRIVE_FOLDER_ID;
+  }
+
+  const folderName = "AI 회의록";
   try {
-    // 1. Search for folder
-    const searchUrl = `https://www.googleapis.com/drive/v3/files?q=mimeType='application/vnd.google-apps.folder'+and+name='${encodeURIComponent(folderName)}'+and+trashed=false&fields=files(id)`;
+    // 1. Search for folder with support for shared drives
+    const searchUrl = `https://www.googleapis.com/drive/v3/files?q=mimeType='application/vnd.google-apps.folder'+and+name='${encodeURIComponent(folderName)}'+and+trashed=false&fields=files(id)&supportsAllDrives=true&includeItemsFromAllDrives=true`;
     const searchRes = await fetch(searchUrl, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
@@ -61,9 +67,9 @@ async function getOrCreateFolder(accessToken: string): Promise<string | null> {
       return searchData.files[0].id;
     }
 
-    // 2. Folder not found, create it
+    // 2. Folder not found, create it (enabling all drives support)
     console.log("Folder not found. Creating a new folder in Google Drive...");
-    const createRes = await fetch("https://www.googleapis.com/drive/v3/files", {
+    const createRes = await fetch("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -142,6 +148,28 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
 
     console.log(`Gemini File API Upload success. File Name: ${uploadedGenAIFile.name}`);
 
+    // Wait for the file to be processed and become ACTIVE
+    let fileState = "PROCESSING";
+    let attempts = 0;
+    while (fileState === "PROCESSING" && attempts < 30) {
+      console.log(`Checking Gemini File state (attempt ${attempts + 1})...`);
+      try {
+        const fileInfo = await aiClient.files.get({ name: uploadedGenAIFile.name });
+        fileState = fileInfo.state || "ACTIVE";
+        console.log(`Current file state: ${fileState}`);
+        if (fileState === "FAILED") {
+          throw new Error("Gemini File API에 음성 파일 업로드 후 처리가 실패했습니다.");
+        }
+        if (fileState === "ACTIVE") {
+          break;
+        }
+      } catch (getErr) {
+        console.warn("Error checking file state, continuing to poll...", getErr);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      attempts++;
+    }
+
     // Prepare structure-driven prompt with JSON response requirement
     const systemPrompt = `당신은 핵심 안건과 결정사항을 추려내는 유능한 서기(Secretary)이자 회의록 전문가입니다.
 제공된 한국어 음성 파일을 정직하고 명확하게 한글로 전사한 뒤, 다음 필드를 포함하는 완벽한 JSON 형식으로 회의록을 보고서 형태로 도출해 주세요.
@@ -155,7 +183,7 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
 - "discussion": 안건에 대한 참여자들의 중심 주장 및 주요 대화 핵심 내용 요약 리스트
 - "decision": 회의 결과 합동 동의하거나 확정된 사항 리스트
 - "todo": 향후 각 담당자가 기한 내 처리해야 할 액션 아이템들의 리스트. 각각 "task"(할 일), "assignee"(담당자 이름, 명확하지 않으면 '미지정'), "dueDate"(기한 정보, 명확하지 않으면 '없음')를 한글 정보로 객체화할 것.
-- "transcript": 음성 파일 전체에 대한 상세 전사(녹취) 스크립트. 모든 말소리를 누락과 곡해 없이 한국어 구어체의 뉘앙스를 최대한 살려서 정교하게 적은 실제 대화 장문 텍스트`;
+- "transcript": 음성 파일 전체에 대한 상세 전사(녹취) 스크립트. 모든 말소리를 누락과 곡해 없이 한글 구어체 뉘앙스를 고스란히 정교하게 적은 실제 대화 내용입니다. [필수 지침] 반드시 녹음 음성의 다양한 목소리 톤과 발화 순간을 분석하여 발화 주체를 구분하고, 대화 형식으로 머리에 "참여자 1", "참여자 2", "참여자 3" 등 화자 구분(Diarization) 형태의 세그먼트 표기(예: "참여자 1: ...\n참여자 2: ...")를 줄바꿈과 함께 적용하여 일목요연하고 정확하게 전사해 주십시오.`;
 
     const modelResponse = await aiClient.models.generateContent({
       model: "gemini-2.5-flash",
@@ -170,6 +198,39 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       ],
       config: {
         responseMimeType: "application/json",
+        responseSchema: {
+          type: "OBJECT",
+          properties: {
+            title: { type: "STRING" },
+            date: { type: "STRING" },
+            agenda: {
+              type: "ARRAY",
+              items: { type: "STRING" }
+            },
+            discussion: {
+              type: "ARRAY",
+              items: { type: "STRING" }
+            },
+            decision: {
+              type: "ARRAY",
+              items: { type: "STRING" }
+            },
+            todo: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  task: { type: "STRING" },
+                  assignee: { type: "STRING" },
+                  dueDate: { type: "STRING" }
+                },
+                required: ["task", "assignee", "dueDate"]
+              }
+            },
+            transcript: { type: "STRING" }
+          },
+          required: ["title", "date", "agenda", "discussion", "decision", "todo", "transcript"]
+        }
       }
     });
 
@@ -181,9 +242,9 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
     }
 
     // Clean or Parse Gemini response
-    let structuredNotes;
+    let structuredNotesRaw: any;
     try {
-      structuredNotes = JSON.parse(outputText.trim());
+      structuredNotesRaw = JSON.parse(outputText.trim());
     } catch (parseErr) {
       console.warn("JSON direct parse failed. Attempting cleanup...", parseErr);
       // Clean up common markdown block slop if any
@@ -191,10 +252,28 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
         .replace(/```json/gi, "")
         .replace(/```/g, "")
         .trim();
-      structuredNotes = JSON.parse(cleanedText);
+      structuredNotesRaw = JSON.parse(cleanedText);
     }
 
-    console.log("Structured Meeting Minutes prepared successfully:", structuredNotes);
+    // Helper normalization helper to robustly ensure safe execution
+    const ensureArray = (val: any): string[] => {
+      if (!val) return [];
+      if (Array.isArray(val)) return val;
+      if (typeof val === "string") return [val];
+      return [];
+    };
+
+    const structuredNotes = {
+      title: structuredNotesRaw.title || "AI 회의록 보고서",
+      date: structuredNotesRaw.date || new Date().toISOString().split('T')[0],
+      agenda: ensureArray(structuredNotesRaw.agenda),
+      discussion: ensureArray(structuredNotesRaw.discussion),
+      decision: ensureArray(structuredNotesRaw.decision),
+      todo: Array.isArray(structuredNotesRaw.todo) ? structuredNotesRaw.todo : [],
+      transcript: structuredNotesRaw.transcript || ""
+    };
+
+    console.log("Normalized Structured Meeting Minutes prepared successfully:", structuredNotes);
 
     // Get or Create Drive folder "AI 회의록 자동화"
     const folderId = await getOrCreateFolder(accessToken);
@@ -202,11 +281,101 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       console.warn("Google Drive folder retrieval failed. Creating file in Drive root instead.");
     }
 
+    // Format creationDateStr (YYYY-MM-DD) and yymmdd (YYMMDD) in KST timezone (representing actual file creation date)
+    let creationDateStr = "";
+    let yymmdd = "";
+    try {
+      const kstFormatter = new Intl.DateTimeFormat('ko-KR', {
+        timeZone: 'Asia/Seoul',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const formatted = kstFormatter.format(new Date()); // "2026. 06. 18."
+      const parts = formatted.replace(/\./g, "").split(" ").map(p => p.trim()).filter(Boolean);
+      if (parts.length === 3) {
+        creationDateStr = `${parts[0]}-${parts[1]}-${parts[2]}`; // "2026-06-18"
+        yymmdd = parts[0].slice(2) + parts[1] + parts[2]; // "260618"
+      }
+    } catch (e) {
+      console.warn("KST formatter failed, falling back to standard Date:", e);
+    }
+
+    if (!creationDateStr || !yymmdd) {
+      const d = new Date();
+      const yyyy = String(d.getFullYear());
+      const yy = yyyy.slice(2);
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      creationDateStr = `${yyyy}-${mm}-${dd}`;
+      yymmdd = yy + mm + dd;
+    }
+
+    const docTitle = `${yymmdd} / ${structuredNotes.title}`;
+    const rawAudioTitle = `${yymmdd} / ${structuredNotes.title}.webm`;
+
+    // [New Option] Upload original Audio File to same space in Google Drive
+    let audioFileUrlOnDrive = null;
+    let audioFileIdOnDrive = null;
+    try {
+      if (folderId) {
+        console.log(`Uploading raw audio file to Google Drive folder [folderId: ${folderId}]...`);
+        const audioBuffer = fs.readFileSync(tempFilePath);
+        const audioBoundary = "314159265358979323846";
+        const delimiter = `\r\n--${audioBoundary}\r\n`;
+        const closeDelimiter = `\r\n--${audioBoundary}--`;
+
+        const audioMetadata = {
+          name: rawAudioTitle,
+          parents: [folderId],
+          mimeType: mimeType || "audio/webm"
+        };
+
+        const multipartBody = Buffer.concat([
+          Buffer.from(delimiter),
+          Buffer.from('Content-Type: application/json; charset=UTF-8\r\n\r\n'),
+          Buffer.from(JSON.stringify(audioMetadata)),
+          Buffer.from(delimiter),
+          Buffer.from(`Content-Type: ${mimeType || "audio/webm"}\r\n\r\n`),
+          audioBuffer,
+          Buffer.from(closeDelimiter)
+        ]);
+
+        const uploadAudioRes = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": `multipart/related; boundary=${audioBoundary}`,
+            "Content-Length": String(multipartBody.length)
+          },
+          body: multipartBody
+        });
+
+        if (uploadAudioRes.ok) {
+          const audioDriveMeta = await uploadAudioRes.json();
+          audioFileIdOnDrive = audioDriveMeta.id;
+          console.log(`Audio upload to Drive successful. File ID: ${audioFileIdOnDrive}`);
+          
+          const getAudioMeta = await fetch(`https://www.googleapis.com/drive/v3/files/${audioFileIdOnDrive}?fields=webViewLink&supportsAllDrives=true`, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+          });
+          if (getAudioMeta.ok) {
+            const audioMetaJson = await getAudioMeta.json();
+            audioFileUrlOnDrive = audioMetaJson.webViewLink;
+          }
+        } else {
+          const errText = await uploadAudioRes.text();
+          console.error("Audio file upload to Google Drive failed:", errText);
+        }
+      }
+    } catch (audioUploadErr) {
+      console.error("Exception in audio file upload to Google Drive:", audioUploadErr);
+    }
+
     // Create styled Google Doc inside that Folder
-    const docTitle = structuredNotes.title || `AI 회의록 - ${new Date().toLocaleDateString('ko-KR')}`;
     console.log(`Creating Google Doc '${docTitle}' inside directory [folderId: ${folderId}]...`);
 
-    const createDocRes = await fetch("https://www.googleapis.com/drive/v3/files", {
+    const createDocRes = await fetch("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -231,44 +400,178 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       throw new Error("Google Docs 생성 과정에서 파일 ID를 획득하지 못했습니다.");
     }
 
-    // Prepare elegant Docs text (First Tab: Meeting Minutes Summary)
+    // Prepare elegant Docs text
     const formatAgenda = structuredNotes.agenda.map((a: string) => `  • ${a}`).join("\n");
     const formatDiscussion = structuredNotes.discussion.map((d: string) => `  • ${d}`).join("\n");
     const formatDecision = structuredNotes.decision.map((de: string) => `  • ${de}`).join("\n");
     const formatTodo = structuredNotes.todo.map((t: any) => `  • ${t.task} (담당자: ${t.assignee || "미지정"}, 기한: ${t.dueDate || "없음"})`).join("\n");
 
-    const mainReportText = 
-      `📝 ${structuredNotes.title || "AI 회의록 자동 생성 보고서"}\n` +
-      `📅 회의 일자: ${structuredNotes.date || new Date().toISOString().split('T')[0]}\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `■ 1. 회의 안건 (Agenda)\n` +
-      `${formatAgenda || "  - 등록된 안건이 없습니다."}\n\n` +
-      `■ 2. 주요 논의사항 (Discussion)\n` +
-      `${formatDiscussion || "  - 등록된 논의사항이 없습니다."}\n\n` +
-      `■ 3. 결정사항 (Decision)\n` +
-      `${formatDecision || "  - 등록된 결정사항이 없습니다."}\n\n` +
-      `■ 4. 향후 할 일 및 후속 조치 (Todo Lists)\n` +
-      `${formatTodo || "  - 지정된 할 일이 없습니다."}\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `본 회의록은 AI 회의록 자동화 웹 서비스를 통해 음성을 정밀 분석하여 자동 기재되었습니다.`;
+    const segments: { text: string; style?: "HEADING_1" | "HEADING_2" | "NORMAL_TEXT"; pageBreakBefore?: boolean }[] = [];
+
+    // 1. Title (📝 [Title]) -> HEADING_1
+    segments.push({
+      text: `📝 ${structuredNotes.title || "AI 회의록 자동 생성 보고서"}\n`,
+      style: "HEADING_1"
+    });
+
+    // 2. Date -> NORMAL_TEXT
+    segments.push({
+      text: `📅 회의 일자: ${creationDateStr}\n`,
+      style: "NORMAL_TEXT"
+    });
+
+    // Divider -> NORMAL_TEXT
+    segments.push({
+      text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`,
+      style: "NORMAL_TEXT"
+    });
+
+    // 1. 회의 안건 (Agenda) -> HEADING_2
+    segments.push({
+      text: `1. 회의 안건 (Agenda)\n`,
+      style: "HEADING_2"
+    });
+    segments.push({
+      text: `${formatAgenda || "  - 등록된 안건이 없습니다."}\n\n`,
+      style: "NORMAL_TEXT"
+    });
+
+    // 2. 주요 논의사항 (Discussion) -> HEADING_2
+    segments.push({
+      text: `2. 주요 논의사항 (Discussion)\n`,
+      style: "HEADING_2"
+    });
+    segments.push({
+      text: `${formatDiscussion || "  - 등록된 논의사항이 없습니다."}\n\n`,
+      style: "NORMAL_TEXT"
+    });
+
+    // 3. 결정사항 (Decision) -> HEADING_2
+    segments.push({
+      text: `3. 결정사항 (Decision)\n`,
+      style: "HEADING_2"
+    });
+    segments.push({
+      text: `${formatDecision || "  - 등록된 결정사항이 없습니다."}\n\n`,
+      style: "NORMAL_TEXT"
+    });
+
+    // 4. 향후 할 일 및 후속 조치 (Todo Lists) -> HEADING_2
+    segments.push({
+      text: `4. 향후 할 일 및 후속 조치 (Todo Lists)\n`,
+      style: "HEADING_2"
+    });
+    segments.push({
+      text: `${formatTodo || "  - 지정된 할 일이 없습니다."}\n\n`,
+      style: "NORMAL_TEXT"
+    });
+
+    // 5. 회의 원본 녹음 링크 (Original Voice Recording) -> HEADING_2
+    if (audioFileUrlOnDrive) {
+      segments.push({
+        text: `5. 회의 원본 녹음 링크 (Original Voice Recording)\n`,
+        style: "HEADING_2"
+      });
+      segments.push({
+        text: `  • 구글 드라이브 오디오 바로가기: ${audioFileUrlOnDrive}\n\n`,
+        style: "NORMAL_TEXT"
+      });
+    }
+
+    // Divider before transcript
+    segments.push({
+      text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`,
+      style: "NORMAL_TEXT"
+    });
+
+    // 🗣️ 전사 녹취 스크립트 (Full Transcript Appendix) -> HEADING_1 with pageBreakBefore: true
+    segments.push({
+      text: `🗣️ 전사 녹취 스크립트 (Full Transcript Appendix)\n`,
+      style: "HEADING_1",
+      pageBreakBefore: true
+    });
+
+    // Transcript content -> NORMAL_TEXT
+    segments.push({
+      text: `${structuredNotes.transcript || "대화 기록을 전사하지 못했습니다."}\n\n`,
+      style: "NORMAL_TEXT"
+    });
+
+    // Footer divider
+    segments.push({
+      text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`,
+      style: "NORMAL_TEXT"
+    });
+
+    // Footer text
+    segments.push({
+      text: `본 회의록은 AI 회의록 자동화 웹 서비스를 통해 음성을 정밀 분석하여 자동 기재되었습니다.`,
+      style: "NORMAL_TEXT"
+    });
+
+    // Concatenate full report text and track index ranges
+    let fullText = "";
+    const styleRequests: any[] = [];
+    let transcriptIndexInFullText = -1;
+
+    let currentPos = 1; // Google Docs starting body index is 1
+
+    for (const seg of segments) {
+      const textLen = seg.text.length;
+      if (textLen === 0) continue;
+
+      const start = currentPos;
+      const end = currentPos + textLen;
+
+      if (seg.pageBreakBefore) {
+        transcriptIndexInFullText = start;
+      }
+
+      if (seg.style && seg.style !== "NORMAL_TEXT") {
+        styleRequests.push({
+          updateParagraphStyle: {
+            paragraphStyle: {
+              namedStyleType: seg.style
+            },
+            range: {
+              startIndex: start,
+              endIndex: end
+            },
+            fields: "namedStyleType"
+          }
+        });
+      }
+
+      fullText += seg.text;
+      currentPos += textLen;
+    }
 
     console.log(`Updating Google Doc index [ID: ${documentId}] with styled content...`);
+    const requests = [
+      {
+        insertText: {
+          text: fullText,
+          location: { index: 1 }
+        }
+      },
+      ...styleRequests
+    ];
+
+    if (transcriptIndexInFullText !== -1) {
+      requests.push({
+        insertPageBreak: {
+          location: { index: transcriptIndexInFullText }
+        }
+      });
+    }
+
     const updateDocsRes = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        requests: [
-          {
-            insertText: {
-              text: mainReportText,
-              location: { index: 1 }
-            }
-          }
-        ]
-      }),
+      body: JSON.stringify({ requests }),
     });
 
     if (!updateDocsRes.ok) {
@@ -278,95 +581,8 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       console.log("Docs content batchUpdate successful!");
     }
 
-    // Try to create a separate tab for the transcript ("전사 녹취 스크립트")
-    let transcriptTabId = null;
-    try {
-      console.log(`Creating a separate Tab for transcript in document [ID: ${documentId}]...`);
-      const createTabRes = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          requests: [
-            {
-              createTab: {
-                tab: {
-                  tabProperties: {
-                    title: "전사 녹취 스크립트"
-                  }
-                }
-              }
-            }
-          ]
-        })
-      });
-
-      if (createTabRes.ok) {
-        const createTabResult = await createTabRes.json();
-        console.log("CreateTab response details:", JSON.stringify(createTabResult));
-        const replies = createTabResult.replies;
-        if (replies && replies.length > 0 && replies[0].createTab) {
-          // Tab ID can reside in replies[0].createTab.tab.tabId or replies[0].createTab.tabId
-          transcriptTabId = replies[0].createTab.tab?.tabId || replies[0].createTab.tabId;
-          console.log(`Tab created successfully. Assigned Tab ID: ${transcriptTabId}`);
-        }
-      } else {
-        const errText = await createTabRes.text();
-        console.error("Tab creation failed with error from Docs API:", errText);
-      }
-    } catch (tabErr) {
-      console.error("Exception occurred while trying to create document Tab:", tabErr);
-    }
-
-    // If separate tab is generated, fill it with full transcript
-    if (transcriptTabId) {
-      try {
-        const transcriptTextStr = structuredNotes.transcript || "대화 기록을 전사하지 못했습니다.";
-        const fullTranscriptContent = 
-          `🗣️ 전사 녹취 스크립트 (Full Transcript)\n` +
-          `📅 회의 일자: ${structuredNotes.date || new Date().toISOString().split('T')[0]}\n` +
-          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-          `${transcriptTextStr}\n\n` +
-          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-          `본 녹취 스크립트는 AI 음성 분석을 통해 회의 대화 내용을 대화 흐름 그대로 텍스트로 보존한 결과물입니다.`;
-
-        console.log(`Inserting transcript to Tab [ID: ${transcriptTabId}]...`);
-        const updateTabDocsRes = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            requests: [
-              {
-                insertText: {
-                  text: fullTranscriptContent,
-                  location: { 
-                    index: 1, 
-                    tabId: transcriptTabId 
-                  }
-                }
-              }
-            ]
-          }),
-        });
-
-        if (!updateTabDocsRes.ok) {
-          const errText = await updateTabDocsRes.text();
-          console.error("Inserting text into Transcript tab failed:", errText);
-        } else {
-          console.log("Successfully appended full transcript text to the created Docs tab!");
-        }
-      } catch (insertTabErr) {
-        console.error("Failed to append content into newly created Tab:", insertTabErr);
-      }
-    }
-
     // Fetch the true webViewLink of created Google Docs file
-    const getFileMeta = await fetch(`https://www.googleapis.com/drive/v3/files/${documentId}?fields=webViewLink`, {
+    const getFileMeta = await fetch(`https://www.googleapis.com/drive/v3/files/${documentId}?fields=webViewLink&supportsAllDrives=true`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     const fileMetaData = await getFileMeta.json();
@@ -376,6 +592,7 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       success: true,
       documentId: documentId,
       documentUrl: documentUrl,
+      audioUrl: audioFileUrlOnDrive,
       structuredNotes: structuredNotes,
       transcript: structuredNotes.transcript || outputText
     });
@@ -432,8 +649,8 @@ app.get("/api/meetings/logs", async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    // List docs inside "AI 회의록 자동화" folder
-    const listUrl = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+mimeType='application/vnd.google-apps.document'+and+trashed=false&orderBy=createdTime+desc&fields=files(id,name,webViewLink,createdTime)`;
+    // List docs inside "AI 회의록 자동화" folder with Shared Drive support
+    const listUrl = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+mimeType='application/vnd.google-apps.document'+and+trashed=false&orderBy=createdTime+desc&fields=files(id,name,webViewLink,createdTime)&supportsAllDrives=true&includeItemsFromAllDrives=true`;
     const listRes = await fetch(listUrl, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
@@ -447,7 +664,7 @@ app.get("/api/meetings/logs", async (req: Request, res: Response): Promise<void>
     const files = listData.files || [];
 
     // Get folder webViewLink to dynamically navigate user
-    const getFolderMeta = await fetch(`https://www.googleapis.com/drive/v3/files/${folderId}?fields=webViewLink`, {
+    const getFolderMeta = await fetch(`https://www.googleapis.com/drive/v3/files/${folderId}?fields=webViewLink&supportsAllDrives=true`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     const folderMetaData = await getFolderMeta.json();

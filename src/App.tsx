@@ -53,6 +53,7 @@ export default function App() {
   const [minutesResult, setMinutesResult] = useState<MeetingMinutes | null>(null);
   const [savedDocUrl, setSavedDocUrl] = useState<string | null>(null);
   const [savedDocId, setSavedDocId] = useState<string | null>(null);
+  const [savedAudioUrl, setSavedAudioUrl] = useState<string | null>(null);
   const [history, setHistory] = useState<DriveDocument[]>([]);
   const [folderUrl, setFolderUrl] = useState<string>("https://drive.google.com");
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
@@ -176,6 +177,7 @@ export default function App() {
       setMinutesResult(null);
       setSavedDocUrl(null);
       setSavedDocId(null);
+      setSavedAudioUrl(null);
       showToast("로그아웃 되었습니다.", "info");
     } catch (err) {
       console.error("Logout error:", err);
@@ -287,6 +289,7 @@ export default function App() {
         setMinutesResult(rawData.structuredNotes);
         setSavedDocUrl(rawData.documentUrl);
         setSavedDocId(rawData.documentId);
+        setSavedAudioUrl(rawData.audioUrl || null);
         setProcessingState("completed");
         showToast("회의록 작성이 완료되었습니다.", "success");
         // Update user document list from Drive
@@ -350,43 +353,31 @@ export default function App() {
               </svg>
             </div>
             <div>
-              <h1 className="text-xl font-bold tracking-tight text-indigo-900 leading-tight">AI Minute<span className="text-indigo-500">.</span></h1>
+              <h1 className="text-xl font-bold tracking-tight text-indigo-900 leading-tight">AI Meeting<span className="text-indigo-500">.</span></h1>
               <p className="text-[10px] text-indigo-400 font-bold uppercase tracking-widest hidden sm:block">Automated Sync Workspace</p>
             </div>
           </div>
 
           <div className="flex items-center gap-4">
-            <nav className="flex space-x-1">
-              <button 
-                onClick={() => setActiveTab("app")}
-                className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wide transition-all duration-200 cursor-pointer ${
-                  activeTab === "app" ? "bg-indigo-600 text-white shadow-md shadow-indigo-200" : "text-indigo-700 hover:text-indigo-950 hover:bg-indigo-50"
-                }`}
-              >
-                서비스 바로가기
-              </button>
-              <button 
-                onClick={() => setActiveTab("guide")}
-                className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wide transition-all duration-200 cursor-pointer ${
-                  activeTab === "guide" ? "bg-indigo-600 text-white shadow-md shadow-indigo-200" : "text-indigo-700 hover:text-indigo-950 hover:bg-indigo-50"
-                }`}
-              >
-                GCP 설정 가이드
-              </button>
-            </nav>
-
             {isAuthenticated && user && (
               <div className="flex items-center gap-3 bg-indigo-50/70 px-3 py-1.5 rounded-2xl border border-indigo-100">
                 {user.photoURL ? (
-                  <img src={user.photoURL} alt="Profile" className="w-7 h-7 rounded-full border border-white referrerPolicy='no-referrer'" />
+                  <img src={user.photoURL} alt="Profile" className="w-7 h-7 rounded-full border border-white" referrerPolicy="no-referrer" />
                 ) : (
                   <div className="w-7 h-7 bg-indigo-600 text-white rounded-full flex items-center justify-center text-xs font-semibold">
                     <User className="w-4 h-4" />
                   </div>
                 )}
                 <div className="text-left text-xs hidden md:block">
-                  <p className="font-bold text-indigo-950 leading-none">{user.displayName || "사용자"}</p>
-                  <p className="text-[10px] text-indigo-500 leading-none mt-0.5">{user.email}</p>
+                  <div className="flex items-center gap-1">
+                    <p className="font-bold text-indigo-950 leading-none">{user.displayName || "사용자"}</p>
+                    {user.email?.endsWith("@impactsquare.com") ? (
+                      <span className="inline-block bg-indigo-600/10 text-indigo-700 text-[9px] font-extrabold px-1.5 py-0.5 rounded-md leading-none border border-indigo-200">corp</span>
+                    ) : (
+                      <span className="inline-block bg-amber-500/10 text-amber-700 text-[9px] font-extrabold px-1.5 py-0.5 rounded-md leading-none border border-amber-200">test</span>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-indigo-500 leading-none mt-1">{user.email}</p>
                 </div>
                 <button 
                   onClick={handleLogout}
@@ -409,72 +400,6 @@ export default function App() {
             <Loader2 className="w-10 h-10 text-emerald-500 animate-spin" />
             <p className="text-slate-500 text-sm mt-4">사용자 로그인 확인 중입니다...</p>
           </div>
-        ) : activeTab === "guide" ? (
-          /* Google Cloud Platform Setup Guide Panel */
-          <motion.div 
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="bg-white rounded-2xl shadow-sm border border-slate-200/85 p-6 md:p-8"
-          >
-            <div className="flex items-center gap-3 border-b border-slate-100 pb-5 mb-6">
-              <div className="p-2 py bg-emerald-50 text-emerald-600 rounded-xl">
-                <Settings className="w-6 h-6" />
-              </div>
-              <div>
-                <h2 className="text-xl font-bold text-slate-900">Google Cloud Platform 및 API 키 설정 가이드</h2>
-                <p className="text-sm text-slate-500">본 서비스의 완벽한 작동을 위해 다음의 인프라와 권한을 확인해 주세요.</p>
-              </div>
-            </div>
-
-            <div className="space-y-6 text-slate-700">
-              <section className="bg-slate-50 rounded-xl p-5 border border-slate-200/60">
-                <h3 className="font-semibold text-slate-900 text-base mb-3 flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-slate-900 text-white text-xs flex items-center justify-center">1</span>
-                  Gemini API 키 입력 및 설정 방법
-                </h3>
-                <p className="text-sm text-slate-600 leading-relaxed mb-3">
-                  회의 음성을 텍스트로 똑똑하게 받아 적고 안건, 결정사항, 향후 할 일 등으로 정밀 추출하기 위해 <strong>Gemini 3.5 Flash</strong> 모델을 운용합니다.
-                </p>
-                <div className="bg-slate-900 text-slate-100 rounded-lg p-3.5 font-mono text-xs overflow-x-auto space-y-1">
-                  <p className="text-emerald-400"># AI Studio UI의 Secrets 패널에서 세팅 가능합니다.</p>
-                  <p>GEMINI_API_KEY="AIzaSyYourOwnRealAPIKeyHere"</p>
-                </div>
-              </section>
-
-              <section className="bg-slate-50 rounded-xl p-5 border border-slate-200/60">
-                <h3 className="font-semibold text-slate-900 text-base mb-3 flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-slate-900 text-white text-xs flex items-center justify-center">2</span>
-                  구글 워크스페이스 OAuth 원리 및 폴더 생성
-                </h3>
-                <p className="text-sm text-slate-600 leading-relaxed mb-3">
-                  이 어플리케이션은 사용자가 구글 계정으로 로그인하는 순간 발급되는 <strong>Access Token</strong>을 임시 활용하여 사용자의 드라이브에 접근합니다.
-                </p>
-                <ul className="list-disc pl-5 text-sm text-slate-600 space-y-1.5">
-                  <li><strong>가입 권한 및 스코프 (Scopes)</strong>: <code>drive.file</code>과 <code>documents</code> 권한만을 신뢰하여 작동합니다. 이는 우리 앱이 생성한 회의록 파일 및 폴더에만 가동 제한되는 안전 스코프입니다.</li>
-                  <li><strong>특정 폴더 저장 기능</strong>: 회의록을 제출하면, 우선 구글 드라이브 내에 <strong className="text-slate-800">"AI 회의록 자동화"</strong> 폴더를 고유하게 탐색하여 자동 개설하고 모든 완성된 구글 문서들을 그 내부에 자동으로 동화해 차곡차곡 쌓아나갑니다.</li>
-                </ul>
-              </section>
-
-              <section className="bg-slate-50 rounded-xl p-5 border border-slate-200/60">
-                <h3 className="font-semibold text-slate-900 text-base mb-3 flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-slate-900 text-white text-xs flex items-center justify-center">3</span>
-                  마이크 하드웨어 장치 권한 허용
-                </h3>
-                <p className="text-sm text-slate-600 leading-relaxed">
-                  브라우저 녹음을 진행하기 위해서 <strong>마이크 허용 권한</strong>이 절대적으로 필요합니다. 브라우저 주소창 왼족의 자물쇠 기호를 눌러, 마이크 액세스 권한이 활성으로 채택되었는지 확인해 주시기 바랍니다. 만일 iFrame 차단에 막힐 경우 상단 설정 메뉴의 <strong>Open in New Tab</strong> 버튼을 눌러 새 탭에서 열어 수행하시면 아주 완벽히 가동됩니다.
-                </p>
-              </section>
-            </div>
-            
-            <div className="mt-6 flex justify-end">
-              <button 
-                onClick={() => setActiveTab("app")}
-                className="px-5 py-2.5 bg-slate-900 text-white rounded-xl text-sm font-semibold hover:bg-slate-800 transition shadow hover:shadow-md cursor-pointer"
-              >
-                가이드 확인완료, 서비스로 돌아가기
-              </button>
-            </div>
-          </motion.div>
         ) : !isAuthenticated ? (
           /* Authentication Screen (Unauthenticated Experience) */
           <div className="max-w-md mx-auto py-12">
@@ -486,19 +411,35 @@ export default function App() {
               <div className="w-16 h-16 bg-emerald-500/10 text-emerald-500 rounded-2xl mx-auto flex items-center justify-center mb-6">
                 <Mic className="w-8 h-8" />
               </div>
-              <h2 className="text-xl font-bold text-slate-900 tracking-tight">구글 연동 로그인 필요</h2>
+              <h2 className="text-xl font-bold text-slate-900 tracking-tight">구글 연동 로그인</h2>
               <p className="text-sm text-slate-500 mt-2 mb-6 leading-relaxed">
-                회의를 녹음하여 텍스트 분석에 도달하고, 생성된 완벽한 회의록을 고객님의 Google Drive 계정에 고도로 정제된 구글 문서로 저장하기 위해서 안전한 구글 로그인이 동반되어야 합니다.
+                본 서비스 이용을 위해서는 구글 연동 로그인이 필요합니다.
               </p>
 
-              <div className="bg-slate-50 rounded-xl p-4 text-left border border-slate-200/60 mb-6 space-y-2">
-                <p className="text-xs text-slate-700 font-semibold flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                  본 프로젝트를 통해 활용되는 필수 전송 기밀 정보:
+              {/* Microphone Hardware Permission Guide Highlight */}
+              <div className="bg-amber-500/5 border border-amber-500/20 rounded-2xl p-4 md:p-5 text-left text-xs mb-6 space-y-2">
+                <p className="font-bold text-amber-950 flex items-center gap-1.5">
+                  <Mic className="w-4 h-4 text-amber-600" />
+                  🎤 필수: 마이크 하드웨어 장치 권한 허용 안내
                 </p>
-                <p className="text-xs text-slate-500 leading-normal pl-3">
-                  • <strong>Google Drive file access</strong>: 파일 및 "AI 회의록 자동화" 폴더 신설 후 문서 관리 용도에 한정.<br />
-                  • <strong>Google Docs write</strong>: Gemini를 통해 자동 구성된 보고서 형식 텍스트 기입.
+                <div className="text-slate-600 leading-relaxed font-medium space-y-1">
+                  <p>음성 녹음 기능을 이용하기 위해서는 브라우저의 <strong>마이크 허용 권한</strong>이 필수적입니다.</p>
+                  <p className="pl-1.5 border-l-2 border-amber-500/35 mt-1 text-slate-500">
+                    * 설정 경로: 브라우저 주소창 왼쪽의 자물쇠 아이콘(혹은 설정 기호)을 눌러 마이크 권한이 활성으로 채택되었는지 확인해 주시기 바랍니다.
+                  </p>
+                  <p className="text-indigo-650 font-bold mt-1">
+                    * 만일 iFrame 차단에 막힐 경우 상단 설정 메뉴의 <strong>Open in New Tab</strong> 버튼을 눌러 새 탭에서 열어 수행하시면 아주 완벽히 가동됩니다.
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 rounded-xl p-4 text-left border border-slate-200/60 mb-6 space-y-2">
+                <p className="text-xs text-indigo-950 font-bold flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-600"></span>
+                  임팩트스퀘어(@impactsquare.com) 맞춤 솔루션
+                </p>
+                <p className="text-[11px] text-slate-500 leading-normal pl-3">
+                  🏢 본 시스템은 <strong>@impactsquare.com</strong> 전용으로 미세조정된 AI 회의록 분석/보관 플랫폼입니다. 로그인 시 임팩트스퀘어 계정으로 안전하게 로그인 하십시오.
                 </p>
               </div>
 
@@ -539,7 +480,7 @@ export default function App() {
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 leading-relaxed mb-4">
-                  본 서비스가 생성한 구글 문서(*.gdoc) 파일들은 모두 구글 드라이브 내 <strong>"AI 회의록 자동화"</strong> 폴더 하나에 아주 세밀하고 안전하게 정리됩니다.
+                  본 서비스가 생성한 구글 문서 및 음성 녹음 파일은 모두 구글 드라이브 내 <strong>"AI 회의록"</strong> 폴더에 저장됩니다.
                 </p>
                 <a 
                   href={folderUrl} 
@@ -571,7 +512,7 @@ export default function App() {
                 </div>
 
                 <div className="text-left mb-6">
-                  <h2 className="text-xl font-bold text-indigo-950">프로젝트 세션 레코더</h2>
+                  <h2 className="text-xl font-bold text-indigo-950">Meeting Recorder</h2>
                   <p className="text-xs text-slate-400 font-medium">실시간 다이어프램 마이크 정밀 수집</p>
                 </div>
 
@@ -684,10 +625,18 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="mt-6 bg-slate-50 p-4 rounded-3xl border border-slate-100 text-[11px] text-slate-500 text-left leading-relaxed flex items-start gap-2.5">
+                {/* Microphone Hardware Access Assistant for Recorder Panel */}
+                <div className="mt-6 bg-amber-500/5 p-4 rounded-3xl border border-amber-500/20 text-[11px] text-slate-700 text-left leading-relaxed flex items-start gap-2.5">
+                  <Mic className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>[필수 마이크 제어 가이드]</strong>: 회의 음성을 깔끔하게 분석하기 위해서 브라우저 <strong>마이크 허용 권한</strong>이 설정되어야 합니다. 브라우저 주소 기입창 좌측 자물쇠나 설정 슬라이더 아이콘을 클릭한 다음 상시 마이크 전송을 [허용]으로 두십시오. (불통시 Open in New Tab 버튼 지원)
+                  </span>
+                </div>
+
+                <div className="mt-4 bg-slate-50 p-4 rounded-3xl border border-slate-100 text-[11px] text-slate-500 text-left leading-relaxed flex items-start gap-2.5">
                   <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
                   <span>
-                    "회의 완료 및 분석" 시, <strong>Express API 및 Gemini 인프라</strong>가 조율되어 정사 후 구글 드라이브 문서 파일로 완벽하게 신설됩니다.
+                    "회의 완료 및 분석" 시, 음성 녹음 파일이 구글 드라이브 문서 파일로 변환되어 자동 생성됩니다.
                   </span>
                 </div>
               </motion.div>
@@ -810,17 +759,30 @@ export default function App() {
                         </div>
                       </div>
 
-                      {savedDocUrl && (
-                        <a 
-                          href={savedDocUrl} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="flex items-center justify-center gap-2 px-4.5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold tracking-wide transition shadow-md shadow-indigo-900/10 cursor-pointer"
-                        >
-                          <FileText className="w-4 h-4 text-white" />
-                          Google Docs 열기
-                        </a>
-                      )}
+                      <div className="flex flex-wrap gap-2.5 items-center">
+                        {savedAudioUrl && (
+                          <a 
+                            href={savedAudioUrl} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="flex items-center justify-center gap-2 px-4.5 py-2.5 bg-indigo-50/10 hover:bg-indigo-50/20 text-indigo-200 border border-indigo-500/20 rounded-xl text-xs font-bold tracking-wide transition cursor-pointer"
+                          >
+                            <Mic className="w-4 h-4 text-indigo-400" />
+                            G-Drive 음성 녹음 열기
+                          </a>
+                        )}
+                        {savedDocUrl && (
+                          <a 
+                            href={savedDocUrl} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="flex items-center justify-center gap-2 px-4.5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold tracking-wide transition shadow-md shadow-indigo-900/10 cursor-pointer"
+                          >
+                            <FileText className="w-4 h-4 text-white" />
+                            Google Docs 열기
+                          </a>
+                        )}
+                      </div>
                     </div>
 
                     {/* Report structured details panels */}
@@ -924,6 +886,21 @@ export default function App() {
                           </div>
                         ) : (
                           <p className="text-xs text-slate-400 italic font-medium pl-1.5">정규화된 추가 후속 업무 스케줄이 부재합니다.</p>
+                        )}
+                      </div>
+
+                      {/* 5. Transcript section */}
+                      <div className="text-left">
+                        <h3 className="text-sm font-bold text-indigo-950 flex items-center gap-1.5 border-b border-indigo-50 pb-2 mb-4">
+                          <span className="w-1.5 h-3.5 bg-indigo-600 rounded-sm inline-block"></span>
+                          🗣️ 실시간 전사 녹취록 (Full Transcript)
+                        </h3>
+                        {minutesResult.transcript ? (
+                          <div className="bg-slate-50 border border-slate-100/80 rounded-2xl p-4.5 max-h-[300px] overflow-y-auto whitespace-pre-wrap text-xs text-slate-600 leading-relaxed font-medium font-sans max-w-full">
+                            {minutesResult.transcript}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-slate-400 italic font-medium pl-1.5">제출된 오디오로부터 해독 데이터가 존재하지 않습니다.</p>
                         )}
                       </div>
 
