@@ -1,0 +1,6 @@
+{
+  "name": "AI 회의록 자동화 서비스",
+  "description": "회의를 실시간 녹음하고 Gemini AI를 활용해 안건, 논의사항, 결정사항 등을 자동 구성하여 고도로 정제된 구글 문서(Google Docs) 회의록으로 구글 드라이브(Google Drive) 폴더에 직접 저장하고 공유하는 스마트 웹 서비스입니다.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
