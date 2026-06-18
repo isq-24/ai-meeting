@@ -159,7 +159,12 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
     const modelResponse = await aiClient.models.generateContent({
       model: "gemini-2.5-flash",
       contents: [
-        uploadedGenAIFile,
+        {
+          fileData: {
+            fileUri: uploadedGenAIFile.uri,
+            mimeType: uploadedGenAIFile.mimeType
+          }
+        },
         systemPrompt
       ],
       config: {
