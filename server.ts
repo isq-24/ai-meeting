@@ -154,7 +154,8 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
 - "agenda": 이번 회의에서 대화의 중심 주제나 회의 대상이 된 안건 리스트
 - "discussion": 안건에 대한 참여자들의 중심 주장 및 주요 대화 핵심 내용 요약 리스트
 - "decision": 회의 결과 합동 동의하거나 확정된 사항 리스트
-- "todo": 향후 각 담당자가 기한 내 처리해야 할 액션 아이템들의 리스트. 각각 "task"(할 일), "assignee"(담당자 이름, 명확하지 않으면 '미지정'), "dueDate"(기한 정보, 명확하지 않으면 '없음')를 한글 정보로 객체화할 것.`;
+- "todo": 향후 각 담당자가 기한 내 처리해야 할 액션 아이템들의 리스트. 각각 "task"(할 일), "assignee"(담당자 이름, 명확하지 않으면 '미지정'), "dueDate"(기한 정보, 명확하지 않으면 '없음')를 한글 정보로 객체화할 것.
+- "transcript": 음성 파일 전체에 대한 상세 전사(녹취) 스크립트. 모든 말소리를 누락과 곡해 없이 한국어 구어체의 뉘앙스를 최대한 살려서 정교하게 적은 실제 대화 장문 텍스트`;
 
     const modelResponse = await aiClient.models.generateContent({
       model: "gemini-2.5-flash",
@@ -223,14 +224,14 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       throw new Error(`Google Docs 생성에 실패했습니다: ${errText}`);
     }
 
-    const docMetadata = await createDocRes.ok ? await createDocRes.json() : null;
+    const docMetadata = await createDocRes.json();
     const documentId = docMetadata?.id;
 
     if (!documentId) {
       throw new Error("Google Docs 생성 과정에서 파일 ID를 획득하지 못했습니다.");
     }
 
-    // Prepare elegant Docs text
+    // Prepare elegant Docs text (First Tab: Meeting Minutes Summary)
     const formatAgenda = structuredNotes.agenda.map((a: string) => `  • ${a}`).join("\n");
     const formatDiscussion = structuredNotes.discussion.map((d: string) => `  • ${d}`).join("\n");
     const formatDecision = structuredNotes.decision.map((de: string) => `  • ${de}`).join("\n");
@@ -277,6 +278,93 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       console.log("Docs content batchUpdate successful!");
     }
 
+    // Try to create a separate tab for the transcript ("전사 녹취 스크립트")
+    let transcriptTabId = null;
+    try {
+      console.log(`Creating a separate Tab for transcript in document [ID: ${documentId}]...`);
+      const createTabRes = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          requests: [
+            {
+              createTab: {
+                tab: {
+                  tabProperties: {
+                    title: "전사 녹취 스크립트"
+                  }
+                }
+              }
+            }
+          ]
+        })
+      });
+
+      if (createTabRes.ok) {
+        const createTabResult = await createTabRes.json();
+        console.log("CreateTab response details:", JSON.stringify(createTabResult));
+        const replies = createTabResult.replies;
+        if (replies && replies.length > 0 && replies[0].createTab) {
+          // Tab ID can reside in replies[0].createTab.tab.tabId or replies[0].createTab.tabId
+          transcriptTabId = replies[0].createTab.tab?.tabId || replies[0].createTab.tabId;
+          console.log(`Tab created successfully. Assigned Tab ID: ${transcriptTabId}`);
+        }
+      } else {
+        const errText = await createTabRes.text();
+        console.error("Tab creation failed with error from Docs API:", errText);
+      }
+    } catch (tabErr) {
+      console.error("Exception occurred while trying to create document Tab:", tabErr);
+    }
+
+    // If separate tab is generated, fill it with full transcript
+    if (transcriptTabId) {
+      try {
+        const transcriptTextStr = structuredNotes.transcript || "대화 기록을 전사하지 못했습니다.";
+        const fullTranscriptContent = 
+          `🗣️ 전사 녹취 스크립트 (Full Transcript)\n` +
+          `📅 회의 일자: ${structuredNotes.date || new Date().toISOString().split('T')[0]}\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `${transcriptTextStr}\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+          `본 녹취 스크립트는 AI 음성 분석을 통해 회의 대화 내용을 대화 흐름 그대로 텍스트로 보존한 결과물입니다.`;
+
+        console.log(`Inserting transcript to Tab [ID: ${transcriptTabId}]...`);
+        const updateTabDocsRes = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            requests: [
+              {
+                insertText: {
+                  text: fullTranscriptContent,
+                  location: { 
+                    index: 1, 
+                    tabId: transcriptTabId 
+                  }
+                }
+              }
+            ]
+          }),
+        });
+
+        if (!updateTabDocsRes.ok) {
+          const errText = await updateTabDocsRes.text();
+          console.error("Inserting text into Transcript tab failed:", errText);
+        } else {
+          console.log("Successfully appended full transcript text to the created Docs tab!");
+        }
+      } catch (insertTabErr) {
+        console.error("Failed to append content into newly created Tab:", insertTabErr);
+      }
+    }
+
     // Fetch the true webViewLink of created Google Docs file
     const getFileMeta = await fetch(`https://www.googleapis.com/drive/v3/files/${documentId}?fields=webViewLink`, {
       headers: { Authorization: `Bearer ${accessToken}` }
@@ -289,7 +377,7 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       documentId: documentId,
       documentUrl: documentUrl,
       structuredNotes: structuredNotes,
-      transcript: outputText
+      transcript: structuredNotes.transcript || outputText
     });
 
   } catch (err: any) {
