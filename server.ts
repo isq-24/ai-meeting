@@ -20,15 +20,21 @@ if (!process.env.GEMINI_API_KEY) {
   console.warn("WARNING: GEMINI_API_KEY is not defined in environment variables!");
 }
 
-// Initialize Gemini Client
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || "",
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    }
+// Helper to retrieve live lazy-loaded GoogleGenAI client
+function getAIClient(): GoogleGenAI {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("서버 환경 변수에 GEMINI_API_KEY가 존재하지 않습니다.");
   }
-});
+  return new GoogleGenAI({
+    apiKey: apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      }
+    }
+  });
+}
 
 // Configure standard express parsers
 app.use(express.json());
@@ -104,6 +110,15 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
     return;
   }
 
+  // Check if GEMINI_API_KEY variable is supplied on Cloud Run environment
+  if (!process.env.GEMINI_API_KEY) {
+    res.status(500).json({
+      success: false,
+      error: "배포된 Google Cloud Run 환경 변수에 GEMINI_API_KEY가 추가되지 않았습니다. Google Cloud Console -> Cloud Run -> 해당 서비스 선택 -> '수정 및 새 버전 배포' 메뉴로 들어가서 환경 변수(Variables) 탭에 GEMINI_API_KEY 항목과 발급받으신 API 키 값을 등록해 주세요."
+    });
+    return;
+  }
+
   let uploadedGenAIFile: any = null;
   const tempFilePath = audioFile.path;
 
@@ -116,8 +131,9 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       mimeType = "audio/webm";
     }
 
+    const aiClient = getAIClient();
     console.log(`Uploading file ${tempFilePath} to Gemini File API (mime: ${mimeType})...`);
-    uploadedGenAIFile = await ai.files.upload({
+    uploadedGenAIFile = await aiClient.files.upload({
       file: tempFilePath,
       config: {
         mimeType: mimeType,
@@ -140,7 +156,7 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
 - "decision": 회의 결과 합동 동의하거나 확정된 사항 리스트
 - "todo": 향후 각 담당자가 기한 내 처리해야 할 액션 아이템들의 리스트. 각각 "task"(할 일), "assignee"(담당자 이름, 명확하지 않으면 '미지정'), "dueDate"(기한 정보, 명확하지 않으면 '없음')를 한글 정보로 객체화할 것.`;
 
-    const modelResponse = await ai.models.generateContent({
+    const modelResponse = await aiClient.models.generateContent({
       model: "gemini-2.5-flash",
       contents: [
         uploadedGenAIFile,
@@ -282,7 +298,8 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
     if (uploadedGenAIFile) {
       try {
         console.log(`Deleting file from Gemini File Storage to free up space: ${uploadedGenAIFile.name}`);
-        await ai.files.delete({ name: uploadedGenAIFile.name });
+        const aiClient = getAIClient();
+        await aiClient.files.delete({ name: uploadedGenAIFile.name });
       } catch (cleanUpErr) {
         console.warn("Failed to clean up Gemini Storage File:", cleanUpErr);
       }
