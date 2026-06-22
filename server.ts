@@ -15,23 +15,14 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 // Set up file uploads using multer in /tmp
 const upload = multer({ dest: os.tmpdir() });
 
-// Check for required environment variables
-if (!process.env.GEMINI_API_KEY) {
-  console.warn("WARNING: GEMINI_API_KEY is not defined in environment variables!");
-}
-
 // Helper to retrieve live lazy-loaded GoogleGenAI client
 function getAIClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("서버 환경 변수에 GEMINI_API_KEY가 존재하지 않습니다.");
-  }
   return new GoogleGenAI({
-    apiKey: apiKey,
+    vertexai: true,
+    project: "ai-impactology-meeting",
+    location: "us-central1",
     httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      }
+      headers: { 'User-Agent': 'aistudio-build' }
     }
   });
 }
@@ -116,14 +107,7 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
     return;
   }
 
-  // Check if GEMINI_API_KEY variable is supplied on Cloud Run environment
-  if (!process.env.GEMINI_API_KEY) {
-    res.status(500).json({
-      success: false,
-      error: "배포된 Google Cloud Run 환경 변수에 GEMINI_API_KEY가 추가되지 않았습니다. Google Cloud Console -> Cloud Run -> 해당 서비스 선택 -> '수정 및 새 버전 배포' 메뉴로 들어가서 환경 변수(Variables) 탭에 GEMINI_API_KEY 항목과 발급받으신 API 키 값을 등록해 주세요."
-    });
-    return;
-  }
+
 
   let uploadedGenAIFile: any = null;
   const tempFilePath = audioFile.path;
