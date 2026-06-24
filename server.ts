@@ -88,46 +88,54 @@ async function getOrCreateFolder(accessToken: string): Promise<string | null> {
   }
 }
 
-// -----------------------------------------------------------------
-// 1. API - POST /api/meetings/process
-// Receives an audio file, transcribes/summarizes via Gemini, 
-// and writes the result to Google Docs in Google Drive folder.
-// -----------------------------------------------------------------
-app.post("/api/meetings/process", upload.single("audio"), async (req: Request, res: Response): Promise<void> => {
-  const audioFile = req.file;
-  const authHeader = req.headers.authorization;
+interface JobState {
+  id: string;
+  status: "processing" | "completed" | "failed";
+  progress: number;
+  message: string;
+  result?: {
+    documentId: string;
+    documentUrl: string;
+    audioUrl: string | null;
+    structuredNotes: any;
+    transcript: string;
+  };
+  error?: string;
+}
 
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    res.status(401).json({ success: false, error: "구글 로그인 인증 토큰이 필요합니다. (Authorization header missing)" });
-    return;
-  }
+const jobs = new Map<string, JobState>();
 
-  const accessToken = authHeader.split(" ")[1];
-
-  if (!audioFile) {
-    res.status(400).json({ success: false, error: "녹음된 오디오 파일이 전송되지 않았습니다." });
-    return;
-  }
-
-  if (!process.env.GEMINI_API_KEY) {
-    res.status(500).json({ success: false, error: "서버 설정에 GEMINI_API_KEY 환경 변수가 존재하지 않습니다. AI Studio API Key가 정상 등록되었는지 확인해 주세요." });
-    return;
-  }
-
+// Async background processing worker to handle Gemini API & Google Drive syncing
+async function processAudioJob(
+  jobId: string,
+  tempFilePath: string,
+  originalFilename: string,
+  fileSize: number,
+  mimetype: string,
+  accessToken: string
+) {
   let uploadedGenAIFile: any = null;
-  const tempFilePath = audioFile.path;
 
   try {
-    console.log(`Received voice file of size ${audioFile.size} bytes at ${tempFilePath}`);
+    const updateJob = (progress: number, message: string) => {
+      console.log(`[Job ${jobId}] Progress: ${progress}%, Message: ${message}`);
+      const job = jobs.get(jobId);
+      if (job) {
+        job.progress = progress;
+        job.message = message;
+      }
+    };
+
+    updateJob(5, "음성 파일 분석을 준비하고 있습니다...");
 
     // Standard fallback mime mapping if webm audio format
-    let mimeType = audioFile.mimetype;
+    let mimeType = mimetype;
     if (mimeType === "application/octet-stream" || !mimeType) {
       mimeType = "audio/webm";
     }
 
     const aiClient = getAIClient();
-    console.log(`Uploading file ${tempFilePath} to Gemini File API (mime: ${mimeType})...`);
+    updateJob(15, "구글 Gemini AI 분석 엔진에 음성 데이터를 안전하게 업로드 중입니다...");
     uploadedGenAIFile = await aiClient.files.upload({
       file: tempFilePath,
       config: {
@@ -141,7 +149,10 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
     let fileState = "PROCESSING";
     let attempts = 0;
     while (fileState === "PROCESSING" && attempts < 30) {
-      console.log(`Checking Gemini File state (attempt ${attempts + 1})...`);
+      updateJob(
+        Math.min(15 + attempts * 2, 40),
+        `Gemini AI에서 고해상도 음성 신호를 분석 중입니다... (대기시간 ${attempts * 2}초)`
+      );
       try {
         const fileInfo = await aiClient.files.get({ name: uploadedGenAIFile.name });
         fileState = fileInfo.state || "ACTIVE";
@@ -159,11 +170,13 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       attempts++;
     }
 
+    updateJob(45, "음성 파일을 텍스트로 정밀하게 받아적고 구조화된 안건을 도출하는 중입니다...");
+
     // Prepare structure-driven prompt with JSON response requirement
     const systemPrompt = `당신은 핵심 안건과 결정사항을 추려내는 유능한 서기(Secretary)이자 회의록 전문가입니다.
 제공된 한국어 음성 파일을 정직하고 명확하게 한글로 전사한 뒤, 다음 필드를 포함하는 완벽한 JSON 형식으로 회의록을 보고서 형태로 도출해 주세요.
 
-한국어로 대답해야 하며, JSON 이외의 설명이나 구분 기호, 코드 블록 마크다운(\`\`\`json ...)은 배제하고 순수한 JSON 데이터만 제공하세요.
+한국어로 대답해야 하며, JSON 이외의 설명이나 구분 기호, 코드 블록 마다운(\`\`\`json ...)은 배제하고 순수한 JSON 데이터만 제공하세요.
 
 객체 필드:
 - "title": 회의의 주요 명제 및 주제를 논의 상태에 맞추어 명쾌하게 뽑아낸 보고서 제목
@@ -175,7 +188,7 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
 - "transcript": 음성 파일 전체에 대한 상세 전사(녹취) 스크립트. 모든 말소리를 누락과 곡해 없이 한글 구어체 뉘앙스를 고스란히 정교하게 적은 실제 대화 내용입니다. [필수 지침] 반드시 녹음 음성의 다양한 목소리 톤과 발화 순간을 분석하여 발화 주체를 구분하고, 대화 형식으로 머리에 "참여자 1", "참여자 2", "참여자 3" 등 화자 구분(Diarization) 형태의 세그먼트 표기(예: "참여자 1: ...\n참여자 2: ...")를 줄바꿈과 함께 적용하여 일목요연하고 정확하게 전사해 주십시오.`;
 
     const modelResponse = await aiClient.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.5-flash",
       contents: [
         {
           fileData: {
@@ -230,13 +243,14 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       throw new Error("Gemini 모델로부터 응답 텍스트를 받지 못했습니다.");
     }
 
+    updateJob(65, "AI 회의록 분석 및 가공 결과를 수집하여 표준 규격으로 구조화하는 중입니다...");
+
     // Clean or Parse Gemini response
     let structuredNotesRaw: any;
     try {
       structuredNotesRaw = JSON.parse(outputText.trim());
     } catch (parseErr) {
       console.warn("JSON direct parse failed. Attempting cleanup...", parseErr);
-      // Clean up common markdown block slop if any
       const cleanedText = outputText
         .replace(/```json/gi, "")
         .replace(/```/g, "")
@@ -244,7 +258,6 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       structuredNotesRaw = JSON.parse(cleanedText);
     }
 
-    // Helper normalization helper to robustly ensure safe execution
     const ensureArray = (val: any): string[] => {
       if (!val) return [];
       if (Array.isArray(val)) return val;
@@ -262,15 +275,16 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       transcript: structuredNotesRaw.transcript || ""
     };
 
-    console.log("Normalized Structured Meeting Minutes prepared successfully:", structuredNotes);
+    console.log("Normalized Structured Meeting Notes prepared successfully:", structuredNotes);
 
-    // Get or Create Drive folder "AI 회의록 자동화"
+    updateJob(75, "구글 드라이브(Google Drive)에 회의록 저장 전용 폴더를 탐색 중입니다...");
+
+    // Get or Create Drive folder "AI 회의록"
     const folderId = await getOrCreateFolder(accessToken);
     if (!folderId) {
       console.warn("Google Drive folder retrieval failed. Creating file in Drive root instead.");
     }
 
-    // Format creationDateStr (YYYY-MM-DD) and yymmdd (YYMMDD) in KST timezone (representing actual file creation date)
     let creationDateStr = "";
     let yymmdd = "";
     try {
@@ -280,11 +294,11 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
         month: '2-digit',
         day: '2-digit'
       });
-      const formatted = kstFormatter.format(new Date()); // "2026. 06. 18."
+      const formatted = kstFormatter.format(new Date());
       const parts = formatted.replace(/\./g, "").split(" ").map(p => p.trim()).filter(Boolean);
       if (parts.length === 3) {
-        creationDateStr = `${parts[0]}-${parts[1]}-${parts[2]}`; // "2026-06-18"
-        yymmdd = parts[0].slice(2) + parts[1] + parts[2]; // "260618"
+        creationDateStr = `${parts[0]}-${parts[1]}-${parts[2]}`;
+        yymmdd = parts[0].slice(2) + parts[1] + parts[2];
       }
     } catch (e) {
       console.warn("KST formatter failed, falling back to standard Date:", e);
@@ -303,7 +317,8 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
     const docTitle = `${yymmdd} / ${structuredNotes.title}`;
     const rawAudioTitle = `${yymmdd} / ${structuredNotes.title}.webm`;
 
-    // [New Option] Upload original Audio File to same space in Google Drive
+    updateJob(80, "녹음된 원본 음성 파일을 구글 드라이브(Google Drive)에 동기화 업로드 중입니다...");
+
     let audioFileUrlOnDrive = null;
     let audioFileIdOnDrive = null;
     try {
@@ -361,8 +376,7 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       console.error("Exception in audio file upload to Google Drive:", audioUploadErr);
     }
 
-    // Create styled Google Doc inside that Folder
-    console.log(`Creating Google Doc '${docTitle}' inside directory [folderId: ${folderId}]...`);
+    updateJob(85, "구글 문서도구(Google Docs)에 회의록 서식을 구성하고 작성하는 중입니다...");
 
     const createDocRes = await fetch("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true", {
       method: "POST",
@@ -389,7 +403,6 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       throw new Error("Google Docs 생성 과정에서 파일 ID를 획득하지 못했습니다.");
     }
 
-    // Prepare elegant Docs text
     const formatAgenda = structuredNotes.agenda.map((a: string) => `  • ${a}`).join("\n");
     const formatDiscussion = structuredNotes.discussion.map((d: string) => `  • ${d}`).join("\n");
     const formatDecision = structuredNotes.decision.map((de: string) => `  • ${de}`).join("\n");
@@ -397,25 +410,21 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
 
     const segments: { text: string; style?: "HEADING_1" | "HEADING_2" | "NORMAL_TEXT"; pageBreakBefore?: boolean }[] = [];
 
-    // 1. Title (📝 [Title]) -> HEADING_1
     segments.push({
       text: `📝 ${structuredNotes.title || "AI 회의록 자동 생성 보고서"}\n`,
       style: "HEADING_1"
     });
 
-    // 2. Date -> NORMAL_TEXT
     segments.push({
       text: `📅 회의 일자: ${creationDateStr}\n`,
       style: "NORMAL_TEXT"
     });
 
-    // Divider -> NORMAL_TEXT
     segments.push({
       text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`,
       style: "NORMAL_TEXT"
     });
 
-    // 1. 회의 안건 (Agenda) -> HEADING_2
     segments.push({
       text: `1. 회의 안건 (Agenda)\n`,
       style: "HEADING_2"
@@ -425,7 +434,6 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       style: "NORMAL_TEXT"
     });
 
-    // 2. 주요 논의사항 (Discussion) -> HEADING_2
     segments.push({
       text: `2. 주요 논의사항 (Discussion)\n`,
       style: "HEADING_2"
@@ -435,7 +443,6 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       style: "NORMAL_TEXT"
     });
 
-    // 3. 결정사항 (Decision) -> HEADING_2
     segments.push({
       text: `3. 결정사항 (Decision)\n`,
       style: "HEADING_2"
@@ -445,7 +452,6 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       style: "NORMAL_TEXT"
     });
 
-    // 4. 향후 할 일 및 후속 조치 (Todo Lists) -> HEADING_2
     segments.push({
       text: `4. 향후 할 일 및 후속 조치 (Todo Lists)\n`,
       style: "HEADING_2"
@@ -455,7 +461,6 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       style: "NORMAL_TEXT"
     });
 
-    // 5. 회의 원본 녹음 링크 (Original Voice Recording) -> HEADING_2
     if (audioFileUrlOnDrive) {
       segments.push({
         text: `5. 회의 원본 녹음 링크 (Original Voice Recording)\n`,
@@ -467,43 +472,36 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       });
     }
 
-    // Divider before transcript
     segments.push({
       text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`,
       style: "NORMAL_TEXT"
     });
 
-    // 🗣️ 전사 녹취 스크립트 (Full Transcript Appendix) -> HEADING_1 with pageBreakBefore: true
     segments.push({
       text: `🗣️ 전사 녹취 스크립트 (Full Transcript Appendix)\n`,
       style: "HEADING_1",
       pageBreakBefore: true
     });
 
-    // Transcript content -> NORMAL_TEXT
     segments.push({
       text: `${structuredNotes.transcript || "대화 기록을 전사하지 못했습니다."}\n\n`,
       style: "NORMAL_TEXT"
     });
 
-    // Footer divider
     segments.push({
       text: `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`,
       style: "NORMAL_TEXT"
     });
 
-    // Footer text
     segments.push({
       text: `본 회의록은 AI 회의록 자동화 웹 서비스를 통해 음성을 정밀 분석하여 자동 기재되었습니다.`,
       style: "NORMAL_TEXT"
     });
 
-    // Concatenate full report text and track index ranges
     let fullText = "";
     const styleRequests: any[] = [];
     let transcriptIndexInFullText = -1;
-
-    let currentPos = 1; // Google Docs starting body index is 1
+    let currentPos = 1;
 
     for (const seg of segments) {
       const textLen = seg.text.length;
@@ -535,7 +533,8 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       currentPos += textLen;
     }
 
-    console.log(`Updating Google Doc index [ID: ${documentId}] with styled content...`);
+    updateJob(90, "작성된 회의록 내용을 구글 문서(Google Docs)에 최종 배치 업로드 중입니다...");
+
     const requests = [
       {
         insertText: {
@@ -570,30 +569,35 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       console.log("Docs content batchUpdate successful!");
     }
 
-    // Fetch the true webViewLink of created Google Docs file
     const getFileMeta = await fetch(`https://www.googleapis.com/drive/v3/files/${documentId}?fields=webViewLink&supportsAllDrives=true`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     const fileMetaData = await getFileMeta.json();
     const documentUrl = fileMetaData.webViewLink || `https://docs.google.com/document/d/${documentId}/edit`;
 
-    res.json({
-      success: true,
-      documentId: documentId,
-      documentUrl: documentUrl,
-      audioUrl: audioFileUrlOnDrive,
-      structuredNotes: structuredNotes,
-      transcript: structuredNotes.transcript || outputText
-    });
+    const job = jobs.get(jobId);
+    if (job) {
+      job.status = "completed";
+      job.progress = 100;
+      job.message = "회의록 작성이 완료되었습니다!";
+      job.result = {
+        documentId: documentId,
+        documentUrl: documentUrl,
+        audioUrl: audioFileUrlOnDrive,
+        structuredNotes: structuredNotes,
+        transcript: structuredNotes.transcript || outputText
+      };
+    }
 
   } catch (err: any) {
-    console.error("Critical error in process API:", err);
-    res.status(500).json({
-      success: false,
-      error: err.message || "회의록 자동 작성을 진행하는 도중 비정상적인 서버 에러가 발생했습니다."
-    });
+    console.error(`Error in background job ${jobId}:`, err);
+    const job = jobs.get(jobId);
+    if (job) {
+      job.status = "failed";
+      job.error = err.message || "회의록 분석 중 알 수 없는 에러가 발생했습니다.";
+      job.message = "회의록 자동 도출 및 구글 연동 중 에러가 발생했습니다.";
+    }
   } finally {
-    // 1. Clean up Gemini Remote API File to manage space
     if (uploadedGenAIFile) {
       try {
         console.log(`Deleting file from Gemini File Storage to free up space: ${uploadedGenAIFile.name}`);
@@ -604,7 +608,6 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       }
     }
 
-    // 2. Clean up locally stored multipart file segment on local filesystem
     try {
       if (fs.existsSync(tempFilePath)) {
         fs.unlinkSync(tempFilePath);
@@ -614,6 +617,75 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
       console.warn("Failed to delete local temp file:", fsCleanErr);
     }
   }
+}
+
+// -----------------------------------------------------------------
+// 1. API - POST /api/meetings/process
+// Receives an audio file, immediately triggers an asynchronous background job,
+// and returns a job status tracking ID (jobId) to prevent connection timeouts.
+// -----------------------------------------------------------------
+app.post("/api/meetings/process", upload.single("audio"), async (req: Request, res: Response): Promise<void> => {
+  const audioFile = req.file;
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    res.status(401).json({ success: false, error: "구글 로그인 인증 토큰이 필요합니다. (Authorization header missing)" });
+    return;
+  }
+
+  const accessToken = authHeader.split(" ")[1];
+
+  if (!audioFile) {
+    res.status(400).json({ success: false, error: "녹음된 오디오 파일이 전송되지 않았습니다." });
+    return;
+  }
+
+  if (!process.env.GEMINI_API_KEY) {
+    res.status(500).json({ success: false, error: "서버 설정에 GEMINI_API_KEY 환경 변수가 존재하지 않습니다. AI Studio API Key가 정상 등록되었는지 확인해 주세요." });
+    return;
+  }
+
+  // Assign a unique jobId for status tracking
+  const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+
+  jobs.set(jobId, {
+    id: jobId,
+    status: "processing",
+    progress: 5,
+    message: "서버에 오디오 파일 전송을 성공적으로 완료했습니다. 분석 작업을 초기화하는 중입니다..."
+  });
+
+  // Execute processing task in the background without awaiting
+  processAudioJob(
+    jobId,
+    audioFile.path,
+    audioFile.originalname,
+    audioFile.size,
+    audioFile.mimetype,
+    accessToken
+  ).catch(err => {
+    console.error(`Uncaught background error in processAudioJob for ${jobId}:`, err);
+  });
+
+  // Instantly return 202 Accepted with jobId to the client
+  res.status(202).json({
+    success: true,
+    jobId: jobId
+  });
+});
+
+// -----------------------------------------------------------------
+// 1.5. API - GET /api/meetings/status/:jobId
+// Returns the real-time background processing status, progress, and error/success outputs.
+// -----------------------------------------------------------------
+app.get("/api/meetings/status/:jobId", (req: Request, res: Response): void => {
+  const { jobId } = req.params;
+  const job = jobs.get(jobId);
+  if (!job) {
+    res.status(404).json({ success: false, error: "요청하신 분석 작업 ID를 찾을 수 없습니다." });
+    return;
+  }
+  res.json({ success: true, job });
 });
 
 

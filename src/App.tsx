@@ -49,6 +49,8 @@ export default function App() {
   const [processingState, setProcessingState] = useState<"idle" | "recording" | "uploading" | "completed" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastAudioBlob, setLastAudioBlob] = useState<Blob | null>(null);
+  const [progressPercentage, setProgressPercentage] = useState(0);
+  const [progressMessage, setProgressMessage] = useState("");
 
   // Result & History States
   const [minutesResult, setMinutesResult] = useState<MeetingMinutes | null>(null);
@@ -271,6 +273,9 @@ export default function App() {
       return;
     }
 
+    setProgressPercentage(5);
+    setProgressMessage("서버에 녹음 데이터를 전송하는 중입니다...");
+
     const formData = new FormData();
     formData.append("audio", blob, "meeting_record.webm");
 
@@ -294,20 +299,57 @@ export default function App() {
       }
 
       if (!response.ok) {
-        throw new Error(rawData?.error || `회의록 분석 중 오류가 발생했습니다. (상태 코드: ${response.status})`);
+        throw new Error(rawData?.error || `회의록 분석 시작에 실패했습니다. (상태 코드: ${response.status})`);
       }
 
-      if (rawData.success) {
-        setMinutesResult(rawData.structuredNotes);
-        setSavedDocUrl(rawData.documentUrl);
-        setSavedDocId(rawData.documentId);
-        setSavedAudioUrl(rawData.audioUrl || null);
-        setProcessingState("completed");
-        showToast("회의록 작성이 완료되었습니다.", "success");
-        // Update user document list from Drive
-        fetchHistory(accessToken);
+      if (rawData.success && rawData.jobId) {
+        const jobId = rawData.jobId;
+        setProgressPercentage(10);
+        setProgressMessage("회의 분석 세션이 예약되었습니다. 백그라운드 분석을 시작합니다...");
+
+        // Polling function
+        const pollStatus = async () => {
+          try {
+            const statusRes = await fetch(`/api/meetings/status/${jobId}`);
+            if (!statusRes.ok) {
+              throw new Error(`분석 상태 체크 실패 (상태 코드: ${statusRes.status})`);
+            }
+            const statusData = await statusRes.json();
+            if (!statusData.success) {
+              throw new Error(statusData.error || "작업 상태 조회 실패");
+            }
+
+            const { job } = statusData;
+            setProgressPercentage(job.progress);
+            setProgressMessage(job.message);
+
+            if (job.status === "completed") {
+              const result = job.result;
+              setMinutesResult(result.structuredNotes);
+              setSavedDocUrl(result.documentUrl);
+              setSavedDocId(result.documentId);
+              setSavedAudioUrl(result.audioUrl || null);
+              setProcessingState("completed");
+              showToast("회의록 작성이 완료되었습니다.", "success");
+              fetchHistory(accessToken);
+            } else if (job.status === "failed") {
+              throw new Error(job.error || "회의록 분석 실패");
+            } else {
+              // Wait 2.5 seconds and poll again
+              setTimeout(pollStatus, 2500);
+            }
+          } catch (pollErr: any) {
+            console.error("Polling error:", pollErr);
+            setErrorMessage(pollErr.message || "회의록 분석 상태 조회 중 오류가 발생했습니다.");
+            setProcessingState("error");
+            showToast("회의록 도출에 실패했습니다. 우측 화면의 재시도 버튼을 통해 다시 시도해 주세요.", "error");
+          }
+        };
+
+        // Trigger first poll
+        setTimeout(pollStatus, 1500);
       } else {
-        throw new Error(rawData.error || "회의록 구조화 실패");
+        throw new Error(rawData.error || "회의록 예약 실패");
       }
     } catch (err: any) {
       console.error("Upload error:", err);
@@ -573,15 +615,26 @@ export default function App() {
                         </motion.p>
                       )}
                       {processingState === "uploading" && (
-                        <motion.p 
+                        <motion.div 
                           initial={{ opacity: 0 }}
                           animate={{ opacity: 1 }}
                           exit={{ opacity: 0 }}
-                          className="text-xs font-bold text-indigo-600 flex items-center gap-1"
+                          className="flex flex-col items-center gap-1.5 w-full max-w-[240px] px-2"
                         >
-                          <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-500" />
-                          Gemini 3.5 Flash 핵심 회의 분석가 기동 중...
-                        </motion.p>
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-600 text-center justify-center">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-500 shrink-0" />
+                            <span>{progressMessage || "분석 기동 중..."}</span>
+                          </div>
+                          <div className="w-full bg-indigo-100 rounded-full h-1 overflow-hidden">
+                            <div 
+                              className="bg-indigo-600 h-1 rounded-full transition-all duration-300" 
+                              style={{ width: `${progressPercentage}%` }}
+                            ></div>
+                          </div>
+                          <span className="text-[9px] font-mono font-bold text-indigo-400">
+                            {progressPercentage}% 완료
+                          </span>
+                        </motion.div>
                       )}
                       {processingState === "completed" && (
                         <motion.p 
@@ -740,14 +793,17 @@ export default function App() {
             <div className="lg:col-span-7">
               <AnimatePresence mode="wait">
                 {processingState === "uploading" ? (
-                  /* Analyzing State */
+                  /* Analyzing State with Progress Bar */
                   <motion.div
                     key="analyzing_screen"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
-                    className="bg-white rounded-[32px] border border-indigo-55 shadow-lg shadow-indigo-150/20 p-10 text-center flex flex-col items-center justify-center min-h-[450px]"
+                    className="bg-white rounded-[32px] border border-indigo-100 shadow-lg shadow-indigo-150/20 p-10 text-center flex flex-col items-center justify-center min-h-[450px] relative overflow-hidden"
                   >
+                    {/* Visual glowing bar top accent */}
+                    <div className="absolute top-0 left-0 h-1.5 bg-indigo-600 transition-all duration-300" style={{ width: `${progressPercentage}%` }}></div>
+                    
                     <div className="relative flex items-center justify-center w-20 h-20 mb-6 font-bold">
                       <motion.div 
                         initial={{ rotate: 0 }}
@@ -757,8 +813,26 @@ export default function App() {
                       />
                       <Sparkles className="w-6 h-6 text-indigo-600 absolute" />
                     </div>
-                    <h2 className="text-lg font-bold text-indigo-950 tracking-tight">AI 회의록 분해 및 구조화 분석 중...</h2>
-                    <p className="text-xs text-slate-500 mt-2.5 max-w-sm mx-auto leading-relaxed font-medium">
+                    
+                    <h2 className="text-lg font-bold text-indigo-950 tracking-tight">
+                      {progressMessage || "AI 회의록 분해 및 구조화 분석 중..."}
+                    </h2>
+                    
+                    {/* Big progress layout */}
+                    <div className="w-full max-w-sm mt-6 mb-2">
+                      <div className="w-full bg-indigo-50 border border-indigo-100 rounded-full h-3 overflow-hidden p-0.5">
+                        <div 
+                          className="bg-indigo-600 h-2 rounded-full transition-all duration-300" 
+                          style={{ width: `${progressPercentage}%` }}
+                        ></div>
+                      </div>
+                      <div className="flex justify-between items-center text-[10px] font-bold text-indigo-500 font-mono tracking-wider mt-2 px-1">
+                        <span>STAGE PROGRESS</span>
+                        <span>{progressPercentage}% COMPLETED</span>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-slate-500 mt-4 max-w-sm mx-auto leading-relaxed font-medium">
                       구글 드라이브와 문서를 검토하고, 전송을 마친 음성 바이너리 데이터를 바탕으로 <strong>안건, 논의사항, 합의결과 및 액션 플랜(할 일)</strong>을 정교하게 다듬고 있습니다. 잠시만 허용해 주시기 바랍니다.
                     </p>
                   </motion.div>
