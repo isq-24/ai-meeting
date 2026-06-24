@@ -17,10 +17,12 @@ const upload = multer({ dest: os.tmpdir() });
 
 // Helper to retrieve live lazy-loaded GoogleGenAI client
 function getAIClient(): GoogleGenAI {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("서버 환경 변수에 GEMINI_API_KEY가 존재하지 않습니다.");
+  }
   return new GoogleGenAI({
-    vertexai: true,
-    project: "ai-impactology-meeting",
-    location: "us-central1",
+    apiKey: apiKey,
     httpOptions: {
       headers: { 'User-Agent': 'aistudio-build' }
     }
@@ -107,7 +109,10 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
     return;
   }
 
-
+  if (!process.env.GEMINI_API_KEY) {
+    res.status(500).json({ success: false, error: "서버 설정에 GEMINI_API_KEY 환경 변수가 존재하지 않습니다. AI Studio API Key가 정상 등록되었는지 확인해 주세요." });
+    return;
+  }
 
   let uploadedGenAIFile: any = null;
   const tempFilePath = audioFile.path;
