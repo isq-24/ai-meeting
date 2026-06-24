@@ -48,6 +48,7 @@ export default function App() {
   const [recordingTime, setRecordingTime] = useState(0);
   const [processingState, setProcessingState] = useState<"idle" | "recording" | "uploading" | "completed" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [lastAudioBlob, setLastAudioBlob] = useState<Blob | null>(null);
 
   // Result & History States
   const [minutesResult, setMinutesResult] = useState<MeetingMinutes | null>(null);
@@ -204,6 +205,9 @@ export default function App() {
         const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
         stream.getTracks().forEach(track => track.stop());
         
+        // Save the blob for retry capabilities
+        setLastAudioBlob(blob);
+        
         // Trigger automatic backend process
         await uploadAudioToServer(blob);
       };
@@ -309,8 +313,20 @@ export default function App() {
       console.error("Upload error:", err);
       setErrorMessage(err.message || "서버 통신 오류가 발생했습니다.");
       setProcessingState("error");
-      showToast("회의록 도출에 실패했습니다. 다시 녹음을 시작해 가동하세요.", "error");
+      showToast("회의록 도출에 실패했습니다. 우측 화면의 재시도 버튼을 통해 다시 시도해 주세요.", "error");
     }
+  };
+
+  // Retry the upload with the last recorded audio blob
+  const handleRetryUpload = async () => {
+    if (!lastAudioBlob) {
+      showToast("재시도할 오디오 데이터가 존재하지 않습니다.", "error");
+      return;
+    }
+    setProcessingState("uploading");
+    setErrorMessage(null);
+    showToast("회의록 작성을 다시 시도합니다.", "info");
+    await uploadAudioToServer(lastAudioBlob);
   };
 
   // Render record elapsed time in format MM:SS
@@ -913,6 +929,35 @@ export default function App() {
                       </div>
 
                     </div>
+                  </motion.div>
+                ) : processingState === "error" ? (
+                  /* Error State Board with Retry Action */
+                  <motion.div
+                    key="error_board"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="bg-white rounded-[32px] border border-rose-100 shadow-lg shadow-rose-100/10 p-10 text-center flex flex-col items-center justify-center min-h-[450px]"
+                  >
+                    <div className="w-20 h-20 bg-rose-50 rounded-[24px] flex items-center justify-center text-rose-500 mb-6 relative">
+                      <AlertCircle className="w-10 h-10 text-rose-600" />
+                    </div>
+                    <h3 className="text-md font-bold text-rose-950">회의록 작성 실패</h3>
+                    <p className="text-xs text-rose-600 font-semibold mt-2.5 max-w-sm leading-relaxed">
+                      {errorMessage || "회의 분석 진행 중 서버 오류가 발생했습니다."}
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-2.5 max-w-sm leading-relaxed font-medium">
+                      네트워크 상태가 일시적으로 불안정하거나, AI 모델 또는 구글 드라이브 연동 과정에 차질이 있었을 수 있습니다. 아래 버튼을 눌러 회의록 작성을 다시 시도할 수 있습니다.
+                    </p>
+                    {lastAudioBlob && (
+                      <button
+                        onClick={handleRetryUpload}
+                        className="mt-6 flex items-center gap-2 px-6 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-xs font-bold shadow-lg shadow-indigo-150 active:scale-95 transition-all duration-205 cursor-pointer"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                        회의록 분석 재시도
+                      </button>
+                    )}
                   </motion.div>
                 ) : (
                   /* Idle state empty board matching design constraints */
