@@ -704,9 +704,14 @@ async function startServer() {
     console.log("Serving static built client assets in production mode.");
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running and listening internally on internal port ${PORT}`);
   });
+
+  // Set server timeouts to 15 minutes (900,000 ms) to support large 1-hour audio uploads & processing
+  server.timeout = 900000;
+  server.headersTimeout = 900000;
+  server.keepAliveTimeout = 900000;
 }
 
 startServer();
