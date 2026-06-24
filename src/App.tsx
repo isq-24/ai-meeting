@@ -279,12 +279,20 @@ export default function App() {
         body: formData
       });
 
-      if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.error || "회의록 분석 중 오류가 발생했습니다.");
+      let rawData: any = null;
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        rawData = await response.json();
+      } else {
+        const errorText = await response.text();
+        console.error("Non-JSON response received:", errorText);
+        throw new Error(`서버에서 올바르지 않은 응답 형식을 수신했습니다. (상태 코드: ${response.status}) ${errorText.substring(0, 150)}`);
       }
 
-      const rawData = await response.json();
+      if (!response.ok) {
+        throw new Error(rawData?.error || `회의록 분석 중 오류가 발생했습니다. (상태 코드: ${response.status})`);
+      }
+
       if (rawData.success) {
         setMinutesResult(rawData.structuredNotes);
         setSavedDocUrl(rawData.documentUrl);

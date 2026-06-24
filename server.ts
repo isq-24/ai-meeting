@@ -672,6 +672,16 @@ app.get("/api/meetings/logs", async (req: Request, res: Response): Promise<void>
 });
 
 
+// Global Express Error Handling Middleware
+app.use((err: any, req: Request, res: Response, next: any) => {
+  console.error("Global Express Error Handler caught an error:", err);
+  res.status(err.status || err.statusCode || 500).json({
+    success: false,
+    error: err.message || "서버 내부 오류가 발생했습니다."
+  });
+});
+
+
 // -----------------------------------------------------------------
 // Vite Development or Production Static Site Hosting Pipeline
 // -----------------------------------------------------------------
