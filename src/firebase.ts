@@ -1,6 +1,8 @@
 import { initializeApp } from "firebase/app";
 import { 
-  getAuth, 
+  initializeAuth,
+  browserLocalPersistence,
+  browserPopupRedirectResolver,
   signInWithPopup, 
   GoogleAuthProvider, 
   onAuthStateChanged, 
@@ -10,7 +12,10 @@ import firebaseConfig from "../firebase-applet-config.json";
 
 // Initialize Firebase using the workspace-provisioned configuration
 const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
+export const auth = initializeAuth(app, {
+  persistence: browserLocalPersistence,
+  popupRedirectResolver: browserPopupRedirectResolver,
+});
 
 // Configure Google OAuth Provider
 export const provider = new GoogleAuthProvider();
@@ -28,8 +33,28 @@ export const initAuth = (
 ) => {
   const token = localStorage.getItem("google_access_token");
   const userJson = localStorage.getItem("google_user_profile");
+  const timestampStr = localStorage.getItem("google_token_timestamp");
 
-  if (token && userJson) {
+  let isExpired = false;
+  if (timestampStr) {
+    const timestamp = parseInt(timestampStr, 10);
+    // Google Access Tokens expire after 1 hour (3600 seconds).
+    // Use a 5 minute (300 seconds) safety buffer.
+    if (isNaN(timestamp) || Date.now() - timestamp > (3600 - 300) * 1000) {
+      isExpired = true;
+    }
+  } else if (token) {
+    // If a token exists without a timestamp, treat it as expired to be safe.
+    isExpired = true;
+  }
+
+  if (isExpired) {
+    localStorage.removeItem("google_access_token");
+    localStorage.removeItem("google_user_profile");
+    localStorage.removeItem("google_token_timestamp");
+    cachedAccessToken = null;
+    if (onAuthFailure) onAuthFailure();
+  } else if (token && userJson) {
     try {
       const cachedUser = JSON.parse(userJson);
       cachedAccessToken = token;
@@ -38,6 +63,7 @@ export const initAuth = (
       }
     } catch (e) {
       console.error("Failed to parse cached user:", e);
+      if (onAuthFailure) onAuthFailure();
     }
   } else {
     if (onAuthFailure) onAuthFailure();
@@ -52,15 +78,19 @@ export const initAuth = (
         photoURL: user.photoURL,
       };
       localStorage.setItem("google_user_profile", JSON.stringify(profile));
-      if (cachedAccessToken) {
-        localStorage.setItem("google_access_token", cachedAccessToken);
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else {
-        const storedToken = localStorage.getItem("google_access_token");
-        if (storedToken) {
-          cachedAccessToken = storedToken;
-          if (onAuthSuccess) onAuthSuccess(user, storedToken);
+      
+      const currentToken = cachedAccessToken || localStorage.getItem("google_access_token");
+      if (currentToken) {
+        cachedAccessToken = currentToken;
+        localStorage.setItem("google_access_token", currentToken);
+        // Ensure timestamp is preserved/set if we have a valid token
+        if (!localStorage.getItem("google_token_timestamp")) {
+          localStorage.setItem("google_token_timestamp", Date.now().toString());
         }
+        if (onAuthSuccess) onAuthSuccess(user, currentToken);
+      } else {
+        // If there's no Google Access Token, we cannot query Google APIs, so trigger failure
+        if (onAuthFailure) onAuthFailure();
       }
     } else {
       const currentToken = localStorage.getItem("google_access_token");
@@ -84,6 +114,7 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
 
     cachedAccessToken = credential.accessToken;
     localStorage.setItem("google_access_token", cachedAccessToken);
+    localStorage.setItem("google_token_timestamp", Date.now().toString());
     
     const profile = {
       uid: result.user.uid,
@@ -114,4 +145,5 @@ export const logout = async () => {
   cachedAccessToken = null;
   localStorage.removeItem("google_access_token");
   localStorage.removeItem("google_user_profile");
+  localStorage.removeItem("google_token_timestamp");
 };

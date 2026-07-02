@@ -51,6 +51,10 @@ async function getOrCreateFolder(accessToken: string): Promise<string | null> {
 
     if (!searchRes.ok) {
       const errText = await searchRes.text();
+      if (searchRes.status === 401) {
+        console.log("[Auth] Google OAuth token status is 401 (unauthorized) during folder search.");
+        throw new Error("401: Google OAuth Token Expired");
+      }
       console.error("Failed to search folder in Google Drive:", errText);
       return null;
     }
@@ -75,14 +79,21 @@ async function getOrCreateFolder(accessToken: string): Promise<string | null> {
     });
 
     if (!createRes.ok) {
-      const errText = await createRes.text();
-      console.error("Failed to create folder in Google Drive:", errText);
-      return null;
-    }
+       const errText = await createRes.text();
+       if (createRes.status === 401) {
+         console.log("[Auth] Google OAuth token status is 401 (unauthorized) during folder creation.");
+         throw new Error("401: Google OAuth Token Expired");
+       }
+       console.error("Failed to create folder in Google Drive:", errText);
+       return null;
+     }
 
     const createData = await createRes.json();
     return createData.id;
-  } catch (error) {
+  } catch (error: any) {
+    if (error && error.message && error.message.includes("401")) {
+      throw error;
+    }
     console.error("Error in getOrCreateFolder:", error);
     return null;
   }
@@ -104,6 +115,75 @@ interface JobState {
 }
 
 const jobs = new Map<string, JobState>();
+
+// Helper function to handle Google GenAI model calls with robust exponential backoff retry for transient errors (e.g., 503 unavailable)
+async function generateContentWithRetry(aiClient: any, params: any, maxRetries = 3, initialDelay = 2000): Promise<any> {
+  const initialModel = params.model || "gemini-3.5-flash";
+  const fallbackModels = ["gemini-3.5-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
+  // Filter out the initialModel so we can try it first, then try the others in order
+  const modelOrder = [initialModel, ...fallbackModels.filter(m => m !== initialModel)];
+
+  let attempt = 0;
+  let modelIndex = 0;
+
+  while (modelIndex < modelOrder.length) {
+    const currentModel = modelOrder[modelIndex];
+    const currentParams = { ...params, model: currentModel };
+    
+    try {
+      if (currentModel !== initialModel) {
+        console.info(`[Gemini API] Falling back and trying model: ${currentModel}`);
+      }
+      return await aiClient.models.generateContent(currentParams);
+    } catch (error: any) {
+      attempt++;
+      const errorStr = error ? (error.message || JSON.stringify(error)) : "";
+      const isTransient = error && (
+        error.status === 503 ||
+        error.status === 429 ||
+        error.status === 500 ||
+        errorStr.includes("503") ||
+        errorStr.includes("429") ||
+        errorStr.includes("500") ||
+        errorStr.includes("high demand") ||
+        errorStr.includes("temp_unavailable") ||
+        errorStr.includes("UNAVAILABLE") ||
+        errorStr.includes("overloaded")
+      );
+      
+      if (isTransient) {
+        if (attempt < maxRetries) {
+          const delay = initialDelay * Math.pow(2, attempt - 1) * (0.8 + Math.random() * 0.4); // Exponential backoff with jitter
+          console.warn(`[Gemini API] Received transient error for ${currentModel} (attempt ${attempt}/${maxRetries}). Retrying in ${Math.round(delay)}ms. Error:`, errorStr);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        } else {
+          // If we exhausted retries for this model, fall back to the next model in the list
+          if (modelIndex + 1 < modelOrder.length) {
+            console.warn(`[Gemini API] Model ${currentModel} failed after ${attempt} attempts with transient error. Falling back to next candidate model...`);
+            modelIndex++;
+            attempt = 0; // Reset attempt count for the next model
+          } else {
+            console.error(`[Gemini API] All candidate models exhausted. Failed after ${attempt} attempts on ${currentModel}:`, errorStr);
+            throw error;
+          }
+        }
+      } else {
+        // If we encounter a non-transient error (like unsupported model or invalid argument on this model),
+        // try the next fallback model in case this model is currently restricted/deprecated.
+        if (modelIndex + 1 < modelOrder.length) {
+          console.warn(`[Gemini API] Model ${currentModel} failed with non-transient error. Falling back to next candidate model. Error:`, errorStr);
+          modelIndex++;
+          attempt = 0; // Reset attempt count for the next model
+        } else {
+          console.error(`[Gemini API] Non-transient error for model ${currentModel}:`, errorStr);
+          throw error;
+        }
+      }
+    }
+  }
+  
+  throw new Error("All candidate Gemini models are currently experiencing high demand. Please try again later.");
+}
 
 // Async background processing worker to handle Gemini API & Google Drive syncing
 async function processAudioJob(
@@ -187,7 +267,7 @@ async function processAudioJob(
 - "todo": 향후 각 담당자가 기한 내 처리해야 할 액션 아이템들의 리스트. 각각 "task"(할 일), "assignee"(담당자 이름, 명확하지 않으면 '미지정'), "dueDate"(기한 정보, 명확하지 않으면 '없음')를 한글 정보로 객체화할 것.
 - "transcript": 음성 파일 전체에 대한 상세 전사(녹취) 스크립트. 모든 말소리를 누락과 곡해 없이 한글 구어체 뉘앙스를 고스란히 정교하게 적은 실제 대화 내용입니다. [필수 지침] 반드시 녹음 음성의 다양한 목소리 톤과 발화 순간을 분석하여 발화 주체를 구분하고, 대화 형식으로 머리에 "참여자 1", "참여자 2", "참여자 3" 등 화자 구분(Diarization) 형태의 세그먼트 표기(예: "참여자 1: ...\n참여자 2: ...")를 줄바꿈과 함께 적용하여 일목요연하고 정확하게 전사해 주십시오.`;
 
-    const modelResponse = await aiClient.models.generateContent({
+    const modelResponse = await generateContentWithRetry(aiClient, {
       model: "gemini-3.5-flash",
       contents: [
         {
@@ -590,11 +670,16 @@ async function processAudioJob(
     }
 
   } catch (err: any) {
-    console.error(`Error in background job ${jobId}:`, err);
+    const isAuthError = err && err.message && (err.message.includes("401") || err.message.includes("authError") || err.message.includes("Invalid Credentials"));
+    if (isAuthError) {
+      console.warn(`OAuth token expired inside background job ${jobId}.`);
+    } else {
+      console.error(`Error in background job ${jobId}:`, err);
+    }
     const job = jobs.get(jobId);
     if (job) {
       job.status = "failed";
-      job.error = err.message || "회의록 분석 중 알 수 없는 에러가 발생했습니다.";
+      job.error = isAuthError ? "구글 로그인 세션이 만료되었습니다. 다시 로그인해 주세요." : (err.message || "회의록 분석 중 알 수 없는 에러가 발생했습니다.");
       job.message = "회의록 자동 도출 및 구글 연동 중 에러가 발생했습니다.";
     }
   } finally {
@@ -620,12 +705,72 @@ async function processAudioJob(
 }
 
 // -----------------------------------------------------------------
+// 0.5. API - POST /api/meetings/upload-chunk
+// Receives an audio file chunk and appends it to a temporary file.
+// Used for overcoming the 413 Request Entity Too Large proxy limits.
+// -----------------------------------------------------------------
+app.post("/api/meetings/upload-chunk", upload.single("chunk"), async (req: Request, res: Response): Promise<void> => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    res.status(401).json({ success: false, error: "구글 로그인 인증 토큰이 필요합니다." });
+    return;
+  }
+
+  const chunkFile = req.file;
+  if (!chunkFile) {
+    res.status(400).json({ success: false, error: "전송된 파일 청크가 없습니다." });
+    return;
+  }
+
+  const { chunkIndex, totalChunks, uploadId } = req.body;
+  if (!uploadId || chunkIndex === undefined || totalChunks === undefined) {
+    res.status(400).json({ success: false, error: "올바르지 않은 파라미터 구성입니다. (uploadId, chunkIndex, totalChunks 필요)" });
+    return;
+  }
+
+  const cIndex = parseInt(chunkIndex, 10);
+  const tChunks = parseInt(totalChunks, 10);
+
+  // Use a clean and secure unique filename for assembly
+  const safeUploadId = uploadId.replace(/[^a-zA-Z0-9_-]/g, "");
+  const assembledPath = path.join(os.tmpdir(), `upload_assembled_${safeUploadId}.webm`);
+
+  try {
+    const chunkBuffer = fs.readFileSync(chunkFile.path);
+
+    if (cIndex === 0) {
+      // Overwrite / Create new file for the first chunk
+      fs.writeFileSync(assembledPath, chunkBuffer);
+    } else {
+      // Append for subsequent chunks
+      fs.appendFileSync(assembledPath, chunkBuffer);
+    }
+
+    // Clean up the temporary chunk file created by multer
+    try {
+      fs.unlinkSync(chunkFile.path);
+    } catch (err) {
+      console.warn(`Failed to delete temporary chunk file ${chunkFile.path}:`, err);
+    }
+
+    const isCompleted = cIndex === tChunks - 1;
+    res.json({
+      success: true,
+      completed: isCompleted,
+      uploadId: safeUploadId
+    });
+  } catch (error: any) {
+    console.error("Error during chunk upload/assembly:", error);
+    res.status(500).json({ success: false, error: "청크 업로드 및 병합 중 오류가 발생했습니다: " + error.message });
+  }
+});
+
+// -----------------------------------------------------------------
 // 1. API - POST /api/meetings/process
-// Receives an audio file, immediately triggers an asynchronous background job,
+// Receives an audio file (direct or chunked-assembled), triggers an asynchronous background job,
 // and returns a job status tracking ID (jobId) to prevent connection timeouts.
 // -----------------------------------------------------------------
 app.post("/api/meetings/process", upload.single("audio"), async (req: Request, res: Response): Promise<void> => {
-  const audioFile = req.file;
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -635,14 +780,38 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
 
   const accessToken = authHeader.split(" ")[1];
 
-  if (!audioFile) {
-    res.status(400).json({ success: false, error: "녹음된 오디오 파일이 전송되지 않았습니다." });
-    return;
-  }
-
   if (!process.env.GEMINI_API_KEY) {
     res.status(500).json({ success: false, error: "서버 설정에 GEMINI_API_KEY 환경 변수가 존재하지 않습니다. AI Studio API Key가 정상 등록되었는지 확인해 주세요." });
     return;
+  }
+
+  let tempFilePath = "";
+  let originalName = "meeting_record.webm";
+  let fileSize = 0;
+  let mimetype = "audio/webm";
+
+  // Check if we are doing a chunked-upload process call
+  const { uploadId } = req.body;
+  if (uploadId) {
+    const safeUploadId = uploadId.replace(/[^a-zA-Z0-9_-]/g, "");
+    tempFilePath = path.join(os.tmpdir(), `upload_assembled_${safeUploadId}.webm`);
+    if (!fs.existsSync(tempFilePath)) {
+      res.status(404).json({ success: false, error: "병합 완료된 오디오 파일을 찾을 수 없습니다. 다시 업로드해 주세요." });
+      return;
+    }
+    const stats = fs.statSync(tempFilePath);
+    fileSize = stats.size;
+  } else {
+    // Standard direct file upload fallback
+    const audioFile = req.file;
+    if (!audioFile) {
+      res.status(400).json({ success: false, error: "녹음된 오디오 파일이 전송되지 않았습니다." });
+      return;
+    }
+    tempFilePath = audioFile.path;
+    originalName = audioFile.originalname;
+    fileSize = audioFile.size;
+    mimetype = audioFile.mimetype;
   }
 
   // Assign a unique jobId for status tracking
@@ -658,10 +827,10 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
   // Execute processing task in the background without awaiting
   processAudioJob(
     jobId,
-    audioFile.path,
-    audioFile.originalname,
-    audioFile.size,
-    audioFile.mimetype,
+    tempFilePath,
+    originalName,
+    fileSize,
+    mimetype,
     accessToken
   ).catch(err => {
     console.error(`Uncaught background error in processAudioJob for ${jobId}:`, err);
@@ -718,6 +887,9 @@ app.get("/api/meetings/logs", async (req: Request, res: Response): Promise<void>
 
     if (!listRes.ok) {
       const errText = await listRes.text();
+      if (listRes.status === 401 || errText.includes("authError") || errText.includes("Invalid Credentials")) {
+        throw new Error("401: Google OAuth Token Expired");
+      }
       throw new Error(`Failed to list docs: ${errText}`);
     }
 
@@ -728,6 +900,11 @@ app.get("/api/meetings/logs", async (req: Request, res: Response): Promise<void>
     const getFolderMeta = await fetch(`https://www.googleapis.com/drive/v3/files/${folderId}?fields=webViewLink&supportsAllDrives=true`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
+    
+    if (!getFolderMeta.ok && getFolderMeta.status === 401) {
+      throw new Error("401: Google OAuth Token Expired");
+    }
+    
     const folderMetaData = await getFolderMeta.json();
     const folderUrl = folderMetaData.webViewLink || `https://drive.google.com/drive/folders/${folderId}`;
 
@@ -738,8 +915,14 @@ app.get("/api/meetings/logs", async (req: Request, res: Response): Promise<void>
     });
 
   } catch (error: any) {
-    console.error("Failed to query meeting logs from Drive:", error);
-    res.status(500).json({ success: false, error: error.message || "이전 기록을 구글 드라이브로부터 동기화하는 도중 에러가 발생했습니다." });
+    const isAuthError = error && error.message && (error.message.includes("401") || error.message.includes("authError") || error.message.includes("Invalid Credentials"));
+    if (isAuthError) {
+      console.log("[Auth] Google OAuth token is expired or revoked. Responding with 401.");
+      res.status(401).json({ success: false, error: "구글 로그인 세션이 만료되었습니다. 다시 로그인해 주세요." });
+    } else {
+      console.error("Failed to query meeting logs from Drive:", error);
+      res.status(500).json({ success: false, error: error.message || "이전 기록을 구글 드라이브로부터 동기화하는 도중 에러가 발생했습니다." });
+    }
   }
 });
 

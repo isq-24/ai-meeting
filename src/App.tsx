@@ -23,7 +23,9 @@ import {
   Info, 
   Settings, 
   HelpCircle, 
-  RefreshCw 
+  RefreshCw,
+  Download,
+  ExternalLink
 } from "lucide-react";
 import { 
   initAuth, 
@@ -41,6 +43,8 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
+  const [showCookieWarning, setShowCookieWarning] = useState(false);
+  const [isInIframe, setIsInIframe] = useState(false);
 
   // Recorder and Audio states
   const [isRecording, setIsRecording] = useState(false);
@@ -90,6 +94,8 @@ export default function App() {
 
   // Initialize Authentication State on Load
   useEffect(() => {
+    setIsInIframe(window.self !== window.top);
+    let alreadyWelcomed = false;
     const unsubscribe = initAuth(
       (currentUser, token) => {
         setUser(currentUser);
@@ -97,7 +103,10 @@ export default function App() {
         setIsAuthenticated(true);
         setIsAuthChecking(false);
         fetchHistory(token);
-        showToast(`${currentUser.displayName || "사용자"}님, 반갑습니다.`, "info");
+        if (!alreadyWelcomed) {
+          showToast(`${currentUser.displayName || "사용자"}님, 반갑습니다.`, "info");
+          alreadyWelcomed = true;
+        }
       },
       () => {
         setUser(null);
@@ -130,19 +139,39 @@ export default function App() {
     setIsHistoryLoading(true);
     try {
       const res = await fetch("/api/meetings/logs", {
+        credentials: "include",
         headers: {
           Authorization: `Bearer ${token}`
         }
       });
+      if (res.status === 401) {
+        console.warn("Google credentials expired or unauthorized (401). Automatically logging out.");
+        await logout();
+        setUser(null);
+        setAccessToken(null);
+        setIsAuthenticated(false);
+        setHistory([]);
+        showToast("구글 로그인 세션이 만료되었습니다. 다시 로그인해 주세요.", "error");
+        return;
+      }
       if (res.ok) {
-        const data = await res.json();
-        if (data.success) {
-          setHistory(data.files || []);
-          if (data.folderUrl) {
-            setFolderUrl(data.folderUrl);
+        const contentType = res.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          const data = await res.json();
+          if (data.success) {
+            setHistory(data.files || []);
+            if (data.folderUrl) {
+              setFolderUrl(data.folderUrl);
+            }
+          } else {
+            console.error("Failed to load history:", data.error);
           }
         } else {
-          console.error("Failed to load history:", data.error);
+          const text = await res.text();
+          console.error("Non-JSON response received on logs:", text);
+          if (text.includes("Cookie check") || text.includes("Action required to load your app") || text.includes("<!doctype html>")) {
+            setShowCookieWarning(true);
+          }
         }
       }
     } catch (err) {
@@ -273,19 +302,72 @@ export default function App() {
       return;
     }
 
-    setProgressPercentage(5);
-    setProgressMessage("서버에 녹음 데이터를 전송하는 중입니다...");
-
-    const formData = new FormData();
-    formData.append("audio", blob, "meeting_record.webm");
+    setProgressPercentage(2);
+    setProgressMessage("녹음 데이터를 서버로 업로드할 준비를 하고 있습니다...");
 
     try {
+      const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+      const totalChunks = Math.ceil(blob.size / CHUNK_SIZE);
+      const uploadId = `upload_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+
+      console.log(`Starting chunked upload of ${blob.size} bytes: ${totalChunks} chunks in total (ID: ${uploadId})`);
+
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const start = chunkIndex * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, blob.size);
+        const chunkBlob = blob.slice(start, end);
+
+        const formData = new FormData();
+        formData.append("chunk", chunkBlob, `chunk_${chunkIndex}`);
+        formData.append("chunkIndex", chunkIndex.toString());
+        formData.append("totalChunks", totalChunks.toString());
+        formData.append("uploadId", uploadId);
+
+        setProgressPercentage(Math.floor(2 + (chunkIndex / totalChunks) * 8));
+        setProgressMessage(`대용량 음성 파일을 업로드 중입니다... (${chunkIndex + 1}/${totalChunks} 청크)`);
+
+        const chunkRes = await fetch("/api/meetings/upload-chunk", {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            Authorization: `Bearer ${accessToken}`
+          },
+          body: formData
+        });
+
+        const chunkContentType = chunkRes.headers.get("content-type");
+        if (!chunkContentType || !chunkContentType.includes("application/json")) {
+          const errText = await chunkRes.text();
+          console.error(`Non-JSON response received for chunk ${chunkIndex}:`, errText);
+          if (errText.includes("Cookie check") || errText.includes("Action required to load your app") || errText.includes("<!doctype html>")) {
+            setShowCookieWarning(true);
+          }
+          throw new Error(`청크 전송 실패 - 서버가 올바르지 않은 형식을 반환했습니다. (상태 코드: ${chunkRes.status})`);
+        }
+
+        if (!chunkRes.ok) {
+          const errData = await chunkRes.json();
+          throw new Error(errData.error || `청크 전송 실패 (상태 코드: ${chunkRes.status})`);
+        }
+
+        const chunkData = await chunkRes.json();
+        if (!chunkData.success) {
+          throw new Error(chunkData.error || "청크 업로드 도중 오류가 발생했습니다.");
+        }
+      }
+
+      setProgressPercentage(10);
+      setProgressMessage("음성 파일 업로드가 완료되었습니다. 분석 세션을 구성하는 중입니다...");
+
+      // Final process request with uploadId
       const response = await fetch("/api/meetings/process", {
         method: "POST",
+        credentials: "include",
         headers: {
+          "Content-Type": "application/json",
           Authorization: `Bearer ${accessToken}`
         },
-        body: formData
+        body: JSON.stringify({ uploadId })
       });
 
       let rawData: any = null;
@@ -295,6 +377,9 @@ export default function App() {
       } else {
         const errorText = await response.text();
         console.error("Non-JSON response received:", errorText);
+        if (errorText.includes("Cookie check") || errorText.includes("Action required to load your app") || errorText.includes("<!doctype html>")) {
+          setShowCookieWarning(true);
+        }
         throw new Error(`서버에서 올바르지 않은 응답 형식을 수신했습니다. (상태 코드: ${response.status}) ${errorText.substring(0, 150)}`);
       }
 
@@ -304,39 +389,52 @@ export default function App() {
 
       if (rawData.success && rawData.jobId) {
         const jobId = rawData.jobId;
-        setProgressPercentage(10);
+        setProgressPercentage(12);
         setProgressMessage("회의 분석 세션이 예약되었습니다. 백그라운드 분석을 시작합니다...");
 
         // Polling function
         const pollStatus = async () => {
           try {
-            const statusRes = await fetch(`/api/meetings/status/${jobId}`);
+            const statusRes = await fetch(`/api/meetings/status/${jobId}`, {
+              credentials: "include"
+            });
             if (!statusRes.ok) {
               throw new Error(`분석 상태 체크 실패 (상태 코드: ${statusRes.status})`);
             }
-            const statusData = await statusRes.json();
-            if (!statusData.success) {
-              throw new Error(statusData.error || "작업 상태 조회 실패");
-            }
+            
+            const statusContentType = statusRes.headers.get("content-type");
+            if (statusContentType && statusContentType.includes("application/json")) {
+              const statusData = await statusRes.json();
+              if (!statusData.success) {
+                throw new Error(statusData.error || "작업 상태 조회 실패");
+              }
 
-            const { job } = statusData;
-            setProgressPercentage(job.progress);
-            setProgressMessage(job.message);
+              const { job } = statusData;
+              setProgressPercentage(job.progress);
+              setProgressMessage(job.message);
 
-            if (job.status === "completed") {
-              const result = job.result;
-              setMinutesResult(result.structuredNotes);
-              setSavedDocUrl(result.documentUrl);
-              setSavedDocId(result.documentId);
-              setSavedAudioUrl(result.audioUrl || null);
-              setProcessingState("completed");
-              showToast("회의록 작성이 완료되었습니다.", "success");
-              fetchHistory(accessToken);
-            } else if (job.status === "failed") {
-              throw new Error(job.error || "회의록 분석 실패");
+              if (job.status === "completed") {
+                const result = job.result;
+                setMinutesResult(result.structuredNotes);
+                setSavedDocUrl(result.documentUrl);
+                setSavedDocId(result.documentId);
+                setSavedAudioUrl(result.audioUrl || null);
+                setProcessingState("completed");
+                showToast("회의록 작성이 완료되었습니다.", "success");
+                fetchHistory(accessToken);
+              } else if (job.status === "failed") {
+                throw new Error(job.error || "회의록 분석 실패");
+              } else {
+                // Wait 2.5 seconds and poll again
+                setTimeout(pollStatus, 2500);
+              }
             } else {
-              // Wait 2.5 seconds and poll again
-              setTimeout(pollStatus, 2500);
+              const statusText = await statusRes.text();
+              console.error("Non-JSON status response received:", statusText);
+              if (statusText.includes("Cookie check") || statusText.includes("Action required to load your app") || statusText.includes("<!doctype html>")) {
+                setShowCookieWarning(true);
+              }
+              throw new Error("서버에서 올바르지 않은 상태 응답 형식을 수신했습니다.");
             }
           } catch (pollErr: any) {
             console.error("Polling error:", pollErr);
@@ -371,6 +469,23 @@ export default function App() {
     await uploadAudioToServer(lastAudioBlob);
   };
 
+  // Download the last recorded audio blob as a local webm backup file
+  const downloadBackupAudio = () => {
+    if (!lastAudioBlob) {
+      showToast("다운로드할 백업 오디오 데이터가 없습니다.", "error");
+      return;
+    }
+    const url = URL.createObjectURL(lastAudioBlob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `meeting_recording_backup_${Date.now()}.webm`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast("회의 음성 파일 로컬 백업 저장이 시작되었습니다.", "success");
+  };
+
   // Render record elapsed time in format MM:SS
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -386,6 +501,31 @@ export default function App() {
   return (
     <div id="app_root" className="min-h-screen bg-[#F0F4FF] text-slate-800 font-sans leading-relaxed selection:bg-indigo-150 selection:text-indigo-950 flex flex-col p-2 sm:p-4 md:p-6 overflow-x-hidden">
       
+      {/* Iframe Warning Banner */}
+      {isInIframe && (
+        <div className="w-full max-w-7xl mx-auto mb-4 bg-amber-500/10 border border-amber-500/35 text-amber-900 rounded-[20px] p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div className="text-xs font-semibold text-slate-800 text-left leading-relaxed">
+              <strong className="text-amber-950 font-bold text-sm">⚠️ 브라우저 쿠키/세션 차단 우회 안내 (아이프레임 환경)</strong>
+              <p className="mt-1 text-slate-600">
+                현재 브라우저 보안 제약(아이프레임 환경)으로 인해 녹음 업로드 중 오류가 발생할 수 있습니다.<br />
+                오류가 발생하면 화면 우측 상단의 <strong className="text-indigo-600">'새 탭에서 열기 (Open in a new tab)'</strong> 아이콘을 클릭하여 새 탭에서 실행해 주시면 백업 걱정 없이 완벽하게 작동합니다!
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              window.open(window.location.href, "_blank");
+            }}
+            className="shrink-0 flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-850 text-white rounded-xl text-xs font-bold transition duration-150 shadow-sm cursor-pointer"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            새 탭에서 앱 실행
+          </button>
+        </div>
+      )}
+
       {/* Toast Alert Portal */}
       <AnimatePresence>
         {toast.message && (
@@ -406,6 +546,60 @@ export default function App() {
             {toast.type === "info" && <Info className="w-4 h-4 text-emerald-400 shrink-0" />}
             <span>{toast.message}</span>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Iframe Cookie Warning Modal */}
+      <AnimatePresence>
+        {showCookieWarning && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-white rounded-3xl border border-indigo-100 p-6 max-w-md w-full shadow-2xl relative overflow-hidden"
+            >
+              <div className="flex items-start gap-4 mb-4">
+                <div className="p-3 bg-amber-50 rounded-2xl border border-amber-200 text-amber-600">
+                  <AlertCircle className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">쿠키/세션 차단 안내</h3>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">Iframe Cookie Restriction</p>
+                </div>
+              </div>
+              
+              <div className="space-y-3 text-sm text-slate-600 mb-6 leading-relaxed text-left">
+                <p>
+                  현재 브라우저 보안 정책(또는 사파리, iOS 환경)에 의해 <strong>아이프레임(iframe) 내에서의 서드파티 쿠키 설정이 차단</strong>되었습니다.
+                </p>
+                <p>
+                  이로 인해 구글 로그인 세션 및 API 요청이 정상적으로 처리되지 못하고 쿠키 확인 페이지로 이동될 수 있습니다.
+                </p>
+                <p className="bg-indigo-50/50 p-3 rounded-xl border border-indigo-100 text-xs text-indigo-800 font-medium">
+                  💡 <strong>해결 방법:</strong> 우측 상단의 <strong>'새 탭에서 열기 (Open in a new tab)'</strong> 아이콘을 클릭하여 직접 앱을 실행하시거나, 아래 버튼을 통해 새 창으로 이동해 주세요.
+                </p>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    window.open(window.location.href, "_blank");
+                  }}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-semibold text-sm py-3 px-4 rounded-xl transition duration-150 flex items-center justify-center gap-2 shadow-md shadow-indigo-100 cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  새 창에서 앱 실행하기
+                </button>
+                <button
+                  onClick={() => setShowCookieWarning(false)}
+                  className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-semibold text-sm rounded-xl transition duration-150 cursor-pointer"
+                >
+                  닫기
+                </button>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
 
@@ -1024,13 +1218,22 @@ export default function App() {
                       네트워크 상태가 일시적으로 불안정하거나, AI 모델 또는 구글 드라이브 연동 과정에 차질이 있었을 수 있습니다. 아래 버튼을 눌러 회의록 작성을 다시 시도할 수 있습니다.
                     </p>
                     {lastAudioBlob && (
-                      <button
-                        onClick={handleRetryUpload}
-                        className="mt-6 flex items-center gap-2 px-6 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-xs font-bold shadow-lg shadow-indigo-150 active:scale-95 transition-all duration-205 cursor-pointer"
-                      >
-                        <RefreshCw className="w-4 h-4" />
-                        회의록 분석 재시도
-                      </button>
+                      <div className="flex flex-col sm:flex-row gap-3 mt-6 w-full justify-center max-w-md">
+                        <button
+                          onClick={handleRetryUpload}
+                          className="flex-1 flex items-center justify-center gap-2 px-5 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-xs font-bold shadow-lg shadow-indigo-150 active:scale-95 transition-all duration-200 cursor-pointer"
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                          회의록 분석 재시도
+                        </button>
+                        <button
+                          onClick={downloadBackupAudio}
+                          className="flex-1 flex items-center justify-center gap-2 px-5 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-bold shadow-lg shadow-emerald-150 active:scale-95 transition-all duration-200 cursor-pointer"
+                        >
+                          <Download className="w-4 h-4" />
+                          녹음 백업 다운로드 (.webm)
+                        </button>
+                      </div>
                     )}
                   </motion.div>
                 ) : (
