@@ -11,6 +11,7 @@ export interface MeetingMinutes {
   discussion: string[];
   decision: string[];
   todo: TodoItem[];
+  attendees?: string[];
 }
 
 export interface DriveDocument {

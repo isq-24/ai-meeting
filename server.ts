@@ -197,6 +197,35 @@ async function processAudioJob(
   let uploadedGenAIFile: any = null;
 
   try {
+    let creationDateStr = "";
+    let yymmdd = "";
+    try {
+      const kstFormatter = new Intl.DateTimeFormat('ko-KR', {
+        timeZone: 'Asia/Seoul',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const formatted = kstFormatter.format(new Date());
+      const parts = formatted.replace(/\./g, "").split(" ").map(p => p.trim()).filter(Boolean);
+      if (parts.length === 3) {
+        creationDateStr = `${parts[0]}-${parts[1]}-${parts[2]}`;
+        yymmdd = parts[0].slice(2) + parts[1] + parts[2];
+      }
+    } catch (e) {
+      console.warn("KST formatter failed, falling back to standard Date:", e);
+    }
+
+    if (!creationDateStr || !yymmdd) {
+      const d = new Date();
+      const yyyy = String(d.getFullYear());
+      const yy = yyyy.slice(2);
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      creationDateStr = `${yyyy}-${mm}-${dd}`;
+      yymmdd = yy + mm + dd;
+    }
+
     const updateJob = (progress: number, message: string) => {
       console.log(`[Job ${jobId}] Progress: ${progress}%, Message: ${message}`);
       const job = jobs.get(jobId);
@@ -253,19 +282,33 @@ async function processAudioJob(
     updateJob(45, "음성 파일을 텍스트로 정밀하게 받아적고 구조화된 안건을 도출하는 중입니다...");
 
     // Prepare structure-driven prompt with JSON response requirement
-    const systemPrompt = `당신은 핵심 안건과 결정사항을 추려내는 유능한 서기(Secretary)이자 회의록 전문가입니다.
-제공된 한국어 음성 파일을 정직하고 명확하게 한글로 전사한 뒤, 다음 필드를 포함하는 완벽한 JSON 형식으로 회의록을 보고서 형태로 도출해 주세요.
+    const systemPrompt = `당신은 스타트업 및 IT 프로덕트 개발 회의의 전사 스크립트를 분석하여, 실행 중심의 고도로 구조화된 '수석 비즈니스 회의록'을 작성하는 전문 비서이자 비즈니스 라이터입니다.
+제공된 한국어 음성 데이터를 정밀 분석하고, 회의의 맥락, 결정된 사항의 인과관계, 그리고 즉시 실행 가능한 액션 아이템(To-Do)이 명확히 드러나는 최고급 비즈니스 회의록을 생성해 주십시오.
 
-한국어로 대답해야 하며, JSON 이외의 설명이나 구분 기호, 코드 블록 마다운(\`\`\`json ...)은 배제하고 순수한 JSON 데이터만 제공하세요.
+[작성 가이드라인]
+1. 논의사항과 결정사항의 분리:
+   - "discussion"(주요 논의사항)에는 아이디어가 오간 과정, 겪고 있는 문제점, 기술적 한계나 예외 상황 등의 '맥락'을 풍부하게 서술하십시오. (예: 어떤 배경에서 이슈가 발생했으며, 참석자 간에 어떤 의견이 대립하거나 개진되었는지 상세 서술)
+   - "decision"(결정사항)에는 논의 끝에 최종적으로 합의된 결론만 명확하고 간결하게 요약하십시오.
+2. 구체적인 액션 아이템(Todo Lists) 도출:
+   - '누가(담당자)', '무엇을(작업 내용)', '언제까지(기한)' 해야 하는지 명확히 매핑하십시오.
+   - 대화 중에서 언급된 날짜나 요일(예: "다음 주 월요일", "수요일 런칭")을 회의 일자 및 현재 날짜를 기준으로 역산하여 구체적인 날짜(YYYY-MM-DD)로 변환하여 기입하십시오. 기한이 명시되지 않았다면 'TBD(추후 확정)' 또는 맥락상 유추 가능한 일정을 적으십시오.
+3. 문체 및 톤앤매너:
+   - 전문적이고 신뢰감 있는 비즈니스 격식체(존칭 및 명사형 종결 어미 혼용)를 사용하십시오.
+   - 불필요한 구어체나 감정적 표현은 배제하고, 객관적 사실과 실행 위주로 정리하십시오.
+4. 원본 데이터의 보존:
+   - 회의 데이터 내의 날짜, 인명, 수치, 핵심 팩트를 왜곡, 축소, 임의 생략하지 말고 완벽히 기재하십시오.
+
+제공된 한국어 음성 파일을 바탕으로 분석한 뒤, 다음 필드를 포함하는 완벽한 JSON 형식으로 회의록을 도출해 주세요. JSON 이외의 설명이나 구분 기호, 코드 블록 마크다운은 배제하고 순수한 JSON 데이터만 제공하세요.
 
 객체 필드:
-- "title": 회의의 주요 명제 및 주제를 논의 상태에 맞추어 명쾌하게 뽑아낸 보고서 제목
-- "date": 회의 발생 일자 (YYYY-MM-DD 기입)
-- "agenda": 이번 회의에서 대화의 중심 주제나 회의 대상이 된 안건 리스트
-- "discussion": 안건에 대한 참여자들의 중심 주장 및 주요 대화 핵심 내용 요약 리스트
-- "decision": 회의 결과 합동 동의하거나 확정된 사항 리스트
-- "todo": 향후 각 담당자가 기한 내 처리해야 할 액션 아이템들의 리스트. 각각 "task"(할 일), "assignee"(담당자 이름, 명확하지 않으면 '미지정'), "dueDate"(기한 정보, 명확하지 않으면 '없음')를 한글 정보로 객체화할 것.
-- "transcript": 음성 파일 전체에 대한 상세 전사(녹취) 스크립트. 모든 말소리를 누락과 곡해 없이 한글 구어체 뉘앙스를 고스란히 정교하게 적은 실제 대화 내용입니다. [필수 지침] 반드시 녹음 음성의 다양한 목소리 톤과 발화 순간을 분석하여 발화 주체를 구분하고, 대화 형식으로 머리에 "참여자 1", "참여자 2", "참여자 3" 등 화자 구분(Diarization) 형태의 세그먼트 표기(예: "참여자 1: ...\n참여자 2: ...")를 줄바꿈과 함께 적용하여 일목요연하고 정확하게 전사해 주십시오.`;
+- "title": 회의의 주요 명제 및 주제를 논의 상태에 맞추어 명쾌하게 뽑아낸 수석 비즈니스 회의록 보고서 제목 (예: "단위 변환 기능 및 1차 출시 일정 조율 회의")
+- "date": 회의 발생 일자 (YYYY-MM-DD 형식으로 분석하여 기입, 음성에서 유추 불가하거나 언급이 없다면 오늘 날짜인 ${creationDateStr} 기입)
+- "attendees": 참석자 이름 목록 (음성 내 대화자 및 화자를 분석하여 실명 매핑된 참석자 이름의 배열)
+- "agenda": 이번 회의에서 다루어진 핵심 안건들을 몇 가지 핵심 키워드로 요약한 리스트
+- "discussion": 논의 배경, 발생한 이슈, 기술적 한계, 참석자 간의 다양한 의견(누가 어떤 발언을 했는지)을 맥락 중심으로 상세히 서술한 리스트
+- "decision": 논의 끝에 최종적으로 결정된 사안을 깔끔하게 요약한 리스트
+- "todo": 향후 각 담당자가 기한 내 처리해야 할 액션 아이템 리스트. 각각 "task"(할 일 내용 - 구체적으로 상세히 기술), "assignee"(담당자 실명, 명확하지 않으면 '미지정'), "dueDate"(YYYY-MM-DD 형식의 구체적 날짜 또는 일정 정보, 명확하지 않으면 'TBD')를 포함하는 객체 배열.
+- "transcript": 음성 파일 전체에 대한 상세 전사(녹취) 스크립트. 모든 말소리를 누락과 곡해 없이 한글 구어체 뉘앙스를 고스란히 정교하게 적은 실제 대화 내용입니다. 반드시 녹음 음성의 다양한 목소리 톤과 발화 순간을 분석하여 발화 주체를 구분하고, 대화 형식으로 머리에 "화자이름(또는 실명 매핑이 안될 시 참여자 1, 참여자 2...)" 등 화자 구분(Diarization) 형태의 세그먼트 표기를 줄바꿈과 함께 적용하여 정확하게 전사해 주십시오.`;
 
     const modelResponse = await generateContentWithRetry(aiClient, {
       model: "gemini-3.5-flash",
@@ -285,6 +328,10 @@ async function processAudioJob(
           properties: {
             title: { type: "STRING" },
             date: { type: "STRING" },
+            attendees: {
+              type: "ARRAY",
+              items: { type: "STRING" }
+            },
             agenda: {
               type: "ARRAY",
               items: { type: "STRING" }
@@ -311,7 +358,7 @@ async function processAudioJob(
             },
             transcript: { type: "STRING" }
           },
-          required: ["title", "date", "agenda", "discussion", "decision", "todo", "transcript"]
+          required: ["title", "date", "attendees", "agenda", "discussion", "decision", "todo", "transcript"]
         }
       }
     });
@@ -347,7 +394,8 @@ async function processAudioJob(
 
     const structuredNotes = {
       title: structuredNotesRaw.title || "AI 회의록 보고서",
-      date: structuredNotesRaw.date || new Date().toISOString().split('T')[0],
+      date: structuredNotesRaw.date || creationDateStr || new Date().toISOString().split('T')[0],
+      attendees: ensureArray(structuredNotesRaw.attendees),
       agenda: ensureArray(structuredNotesRaw.agenda),
       discussion: ensureArray(structuredNotesRaw.discussion),
       decision: ensureArray(structuredNotesRaw.decision),
@@ -363,35 +411,6 @@ async function processAudioJob(
     const folderId = await getOrCreateFolder(accessToken);
     if (!folderId) {
       console.warn("Google Drive folder retrieval failed. Creating file in Drive root instead.");
-    }
-
-    let creationDateStr = "";
-    let yymmdd = "";
-    try {
-      const kstFormatter = new Intl.DateTimeFormat('ko-KR', {
-        timeZone: 'Asia/Seoul',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
-      });
-      const formatted = kstFormatter.format(new Date());
-      const parts = formatted.replace(/\./g, "").split(" ").map(p => p.trim()).filter(Boolean);
-      if (parts.length === 3) {
-        creationDateStr = `${parts[0]}-${parts[1]}-${parts[2]}`;
-        yymmdd = parts[0].slice(2) + parts[1] + parts[2];
-      }
-    } catch (e) {
-      console.warn("KST formatter failed, falling back to standard Date:", e);
-    }
-
-    if (!creationDateStr || !yymmdd) {
-      const d = new Date();
-      const yyyy = String(d.getFullYear());
-      const yy = yyyy.slice(2);
-      const mm = String(d.getMonth() + 1).padStart(2, '0');
-      const dd = String(d.getDate()).padStart(2, '0');
-      creationDateStr = `${yyyy}-${mm}-${dd}`;
-      yymmdd = yy + mm + dd;
     }
 
     const docTitle = `${yymmdd} / ${structuredNotes.title}`;
@@ -483,10 +502,23 @@ async function processAudioJob(
       throw new Error("Google Docs 생성 과정에서 파일 ID를 획득하지 못했습니다.");
     }
 
-    const formatAgenda = structuredNotes.agenda.map((a: string) => `  • ${a}`).join("\n");
-    const formatDiscussion = structuredNotes.discussion.map((d: string) => `  • ${d}`).join("\n");
-    const formatDecision = structuredNotes.decision.map((de: string) => `  • ${de}`).join("\n");
-    const formatTodo = structuredNotes.todo.map((t: any) => `  • ${t.task} (담당자: ${t.assignee || "미지정"}, 기한: ${t.dueDate || "없음"})`).join("\n");
+    const attendeesList = structuredNotes.attendees && structuredNotes.attendees.length > 0
+      ? structuredNotes.attendees.join(", ")
+      : "미지정";
+
+    const formatAgenda = structuredNotes.agenda.map((a: string) => `* ${a}`).join("\n");
+    const formatDiscussion = structuredNotes.discussion.map((d: string) => `* ${d}`).join("\n");
+    const formatDecision = structuredNotes.decision.map((de: string) => `* ${de}`).join("\n");
+    
+    // Construct the Todo Markdown table
+    let formatTodo = "| 작업 내용 | 담당자 | 기한 |\n| :--- | :--- | :--- |\n";
+    if (structuredNotes.todo && structuredNotes.todo.length > 0) {
+      formatTodo += structuredNotes.todo.map((t: any) => 
+        `| ${t.task} | ${t.assignee || "미지정"} | ${t.dueDate || "TBD"} |`
+      ).join("\n");
+    } else {
+      formatTodo += "| 지정된 할 일이 없습니다. | - | - |";
+    }
 
     const segments: { text: string; style?: "HEADING_1" | "HEADING_2" | "NORMAL_TEXT"; pageBreakBefore?: boolean }[] = [];
 
@@ -496,7 +528,7 @@ async function processAudioJob(
     });
 
     segments.push({
-      text: `📅 회의 일자: ${creationDateStr}\n`,
+      text: `📅 회의 일자: ${structuredNotes.date || creationDateStr}\n👥 참석자: ${attendeesList}\n`,
       style: "NORMAL_TEXT"
     });
 
@@ -506,38 +538,38 @@ async function processAudioJob(
     });
 
     segments.push({
-      text: `1. 회의 안건 (Agenda)\n`,
+      text: `### 1. 회의 안건 (Agenda)\n`,
       style: "HEADING_2"
     });
     segments.push({
-      text: `${formatAgenda || "  - 등록된 안건이 없습니다."}\n\n`,
+      text: `${formatAgenda || "* 등록된 안건이 없습니다."}\n\n`,
       style: "NORMAL_TEXT"
     });
 
     segments.push({
-      text: `2. 주요 논의사항 (Discussion)\n`,
+      text: `### 2. 주요 논의사항 (Discussion)\n`,
       style: "HEADING_2"
     });
     segments.push({
-      text: `${formatDiscussion || "  - 등록된 논의사항이 없습니다."}\n\n`,
+      text: `${formatDiscussion || "* 등록된 논의사항이 없습니다."}\n\n`,
       style: "NORMAL_TEXT"
     });
 
     segments.push({
-      text: `3. 결정사항 (Decision)\n`,
+      text: `### 3. 결정사항 (Decision)\n`,
       style: "HEADING_2"
     });
     segments.push({
-      text: `${formatDecision || "  - 등록된 결정사항이 없습니다."}\n\n`,
+      text: `${formatDecision || "* 등록된 결정사항이 없습니다."}\n\n`,
       style: "NORMAL_TEXT"
     });
 
     segments.push({
-      text: `4. 향후 할 일 및 후속 조치 (Todo Lists)\n`,
+      text: `### 4. 향후 할 일 및 후속 조치 (Todo Lists)\n`,
       style: "HEADING_2"
     });
     segments.push({
-      text: `${formatTodo || "  - 지정된 할 일이 없습니다."}\n\n`,
+      text: `${formatTodo}\n\n`,
       style: "NORMAL_TEXT"
     });
 

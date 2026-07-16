@@ -17,6 +17,7 @@ import {
   History, 
   Calendar, 
   User, 
+  Users,
   Loader2, 
   ChevronRight, 
   AlertCircle, 
@@ -1045,9 +1046,17 @@ export default function App() {
                           DOCUMENT SYNCHRONIZED
                         </span>
                         <h2 className="text-lg font-bold tracking-tight">{minutesResult.title}</h2>
-                        <div className="flex items-center gap-2 mt-1 text-slate-300 text-xs font-semibold">
-                          <Calendar className="w-3.5 h-3.5 text-indigo-400" />
-                          <span>작성일: {minutesResult.date || new Date().toISOString().split('T')[0]}</span>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-slate-300 text-xs font-semibold">
+                          <div className="flex items-center gap-1.5">
+                            <Calendar className="w-3.5 h-3.5 text-indigo-400" />
+                            <span>작성일: {minutesResult.date || new Date().toISOString().split('T')[0]}</span>
+                          </div>
+                          {minutesResult.attendees && minutesResult.attendees.length > 0 && (
+                            <div className="flex items-center gap-1.5">
+                              <Users className="w-3.5 h-3.5 text-indigo-400" />
+                              <span>참석자: {minutesResult.attendees.join(", ")}</span>
+                            </div>
+                          )}
                         </div>
                       </div>
 
