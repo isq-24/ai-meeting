@@ -48,12 +48,14 @@ export default function App() {
   const [isInIframe, setIsInIframe] = useState(false);
 
   // Recorder and Audio states
+  const [inputMode, setInputMode] = useState<"record" | "upload">("record");
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [processingState, setProcessingState] = useState<"idle" | "recording" | "uploading" | "completed" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastAudioBlob, setLastAudioBlob] = useState<Blob | null>(null);
+  const [lastUploadedFile, setLastUploadedFile] = useState<File | null>(null);
   const [progressPercentage, setProgressPercentage] = useState(0);
   const [progressMessage, setProgressMessage] = useState("");
 
@@ -105,7 +107,7 @@ export default function App() {
         setIsAuthChecking(false);
         fetchHistory(token);
         if (!alreadyWelcomed) {
-          showToast(`${currentUser.displayName || "사용자"}님, 반갑습니다.`, "info");
+          showToast(`${currentUser.displayName || "사용자"}님, 반가워요.`, "info");
           alreadyWelcomed = true;
         }
       },
@@ -152,7 +154,7 @@ export default function App() {
         setAccessToken(null);
         setIsAuthenticated(false);
         setHistory([]);
-        showToast("구글 로그인 세션이 만료되었습니다. 다시 로그인해 주세요.", "error");
+        showToast("구글 로그인 세션이 끝났어요. 다시 로그인해주세요.", "error");
         return;
       }
       if (res.ok) {
@@ -191,11 +193,11 @@ export default function App() {
         setAccessToken(result.accessToken);
         setIsAuthenticated(true);
         fetchHistory(result.accessToken);
-        showToast("성공적으로 로그인되었습니다.", "success");
+        showToast("로그인했어요.", "success");
       }
     } catch (err: any) {
       console.error("Login failed:", err);
-      showToast("구글 로그인 도중 에러가 발생했습니다.", "error");
+      showToast("구글 로그인 중에 오류가 생겼어요.", "error");
     }
   };
 
@@ -211,7 +213,7 @@ export default function App() {
       setSavedDocUrl(null);
       setSavedDocId(null);
       setSavedAudioUrl(null);
-      showToast("로그아웃 되었습니다.", "info");
+      showToast("로그아웃했어요.", "info");
     } catch (err) {
       console.error("Logout error:", err);
     }
@@ -255,12 +257,12 @@ export default function App() {
         setRecordingTime(prev => prev + 1);
       }, 1000);
       
-      showToast("녹음이 시작되었습니다.", "info");
+      showToast("녹음을 시작했어요.", "info");
     } catch (err) {
       console.error("Microphone access failed:", err);
       setHasMicPermission(false);
       setProcessingState("idle");
-      showToast("마이크 오디오 권한을 허용해 주셔야 녹음 기능을 진행하실 수 있습니다.", "error");
+      showToast("녹음하려면 마이크 권한을 허용해야 해요.", "error");
     }
   };
 
@@ -269,7 +271,7 @@ export default function App() {
       mediaRecorderRef.current.pause();
       setIsPaused(true);
       if (timerRef.current) clearInterval(timerRef.current);
-      showToast("녹음이 일시 정지되었습니다.", "info");
+      showToast("녹음을 잠깐 멈췄어요.", "info");
     }
   };
 
@@ -280,7 +282,7 @@ export default function App() {
       timerRef.current = setInterval(() => {
         setRecordingTime(prev => prev + 1);
       }, 1000);
-      showToast("녹음이 제개되었습니다.", "info");
+      showToast("녹음을 다시 시작했어요.", "info");
     }
   };
 
@@ -291,20 +293,20 @@ export default function App() {
       setIsPaused(false);
       if (timerRef.current) clearInterval(timerRef.current);
       setProcessingState("uploading");
-      showToast("녹음이 완료되었습니다. 회의록 작성이 시작됩니다.", "success");
+      showToast("녹음을 완료했어요. 회의록을 만들기 시작할게요.", "success");
     }
   };
 
   // Send voice blob file to express server for Gemini API & Google Workspace Sync
   const uploadAudioToServer = async (blob: Blob) => {
     if (!accessToken) {
-      showToast("구글 인증 세션이 만료되었습니다. 다시 로그인 하세요.", "error");
+      showToast("구글 인증 세션이 끝났어요. 다시 로그인해주세요.", "error");
       setProcessingState("idle");
       return;
     }
 
     setProgressPercentage(2);
-    setProgressMessage("녹음 데이터를 서버로 업로드할 준비를 하고 있습니다...");
+    setProgressMessage("녹음한 음성을 서버로 보낼 준비를 하고 있어요...");
 
     try {
       const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
@@ -325,7 +327,7 @@ export default function App() {
         formData.append("uploadId", uploadId);
 
         setProgressPercentage(Math.floor(2 + (chunkIndex / totalChunks) * 8));
-        setProgressMessage(`대용량 음성 파일을 업로드 중입니다... (${chunkIndex + 1}/${totalChunks} 청크)`);
+        setProgressMessage(`대용량 음성 파일을 보내고 있어요... (${chunkIndex + 1}/${totalChunks} 청크)`);
 
         const chunkRes = await fetch("/api/meetings/upload-chunk", {
           method: "POST",
@@ -343,22 +345,22 @@ export default function App() {
           if (errText.includes("Cookie check") || errText.includes("Action required to load your app") || errText.includes("<!doctype html>")) {
             setShowCookieWarning(true);
           }
-          throw new Error(`청크 전송 실패 - 서버가 올바르지 않은 형식을 반환했습니다. (상태 코드: ${chunkRes.status})`);
+          throw new Error(`보내지 못했어요. 서버가 올바르지 않은 형식으로 응답했어요. (상태 코드: ${chunkRes.status})`);
         }
 
         if (!chunkRes.ok) {
           const errData = await chunkRes.json();
-          throw new Error(errData.error || `청크 전송 실패 (상태 코드: ${chunkRes.status})`);
+          throw new Error(errData.error || `보내지 못했어요. (상태 코드: ${chunkRes.status})`);
         }
 
         const chunkData = await chunkRes.json();
         if (!chunkData.success) {
-          throw new Error(chunkData.error || "청크 업로드 도중 오류가 발생했습니다.");
+          throw new Error(chunkData.error || "보내지 못했어요. 파일을 보내는 도중 오류가 생겼어요.");
         }
       }
 
       setProgressPercentage(10);
-      setProgressMessage("음성 파일 업로드가 완료되었습니다. 분석 세션을 구성하는 중입니다...");
+      setProgressMessage("음성 파일을 다 보냈어요. AI 분석을 준비하고 있어요...");
 
       // Final process request with uploadId
       const response = await fetch("/api/meetings/process", {
@@ -381,17 +383,17 @@ export default function App() {
         if (errorText.includes("Cookie check") || errorText.includes("Action required to load your app") || errorText.includes("<!doctype html>")) {
           setShowCookieWarning(true);
         }
-        throw new Error(`서버에서 올바르지 않은 응답 형식을 수신했습니다. (상태 코드: ${response.status}) ${errorText.substring(0, 150)}`);
+        throw new Error(`서버에서 올바르지 않은 응답을 받았어요. (상태 코드: ${response.status}) ${errorText.substring(0, 150)}`);
       }
 
       if (!response.ok) {
-        throw new Error(rawData?.error || `회의록 분석 시작에 실패했습니다. (상태 코드: ${response.status})`);
+        throw new Error(rawData?.error || `회의록 분석을 시작하지 못했어요. (상태 코드: ${response.status})`);
       }
 
       if (rawData.success && rawData.jobId) {
         const jobId = rawData.jobId;
         setProgressPercentage(12);
-        setProgressMessage("회의 분석 세션이 예약되었습니다. 백그라운드 분석을 시작합니다...");
+        setProgressMessage("회의 분석을 예약했어요. 백그라운드에서 분석을 시작할게요...");
 
         // Polling function
         const pollStatus = async () => {
@@ -400,14 +402,14 @@ export default function App() {
               credentials: "include"
             });
             if (!statusRes.ok) {
-              throw new Error(`분석 상태 체크 실패 (상태 코드: ${statusRes.status})`);
+              throw new Error(`분석 상태를 확인하지 못했어요. (상태 코드: ${statusRes.status})`);
             }
             
             const statusContentType = statusRes.headers.get("content-type");
             if (statusContentType && statusContentType.includes("application/json")) {
               const statusData = await statusRes.json();
               if (!statusData.success) {
-                throw new Error(statusData.error || "작업 상태 조회 실패");
+                throw new Error(statusData.error || "작업 상태를 확인하지 못했어요.");
               }
 
               const { job } = statusData;
@@ -421,10 +423,10 @@ export default function App() {
                 setSavedDocId(result.documentId);
                 setSavedAudioUrl(result.audioUrl || null);
                 setProcessingState("completed");
-                showToast("회의록 작성이 완료되었습니다.", "success");
+                showToast("회의록을 다 작성했어요.", "success");
                 fetchHistory(accessToken);
               } else if (job.status === "failed") {
-                throw new Error(job.error || "회의록 분석 실패");
+                throw new Error(job.error || "회의록 분석을 하지 못했어요.");
               } else {
                 // Wait 2.5 seconds and poll again
                 setTimeout(pollStatus, 2500);
@@ -435,56 +437,235 @@ export default function App() {
               if (statusText.includes("Cookie check") || statusText.includes("Action required to load your app") || statusText.includes("<!doctype html>")) {
                 setShowCookieWarning(true);
               }
-              throw new Error("서버에서 올바르지 않은 상태 응답 형식을 수신했습니다.");
+              throw new Error("서버에서 올바르지 않은 상태 응답을 받았어요.");
             }
           } catch (pollErr: any) {
             console.error("Polling error:", pollErr);
-            setErrorMessage(pollErr.message || "회의록 분석 상태 조회 중 오류가 발생했습니다.");
+            setErrorMessage(pollErr.message || "회의록 분석 상태를 확인하는 도중 오류가 생겼어요.");
             setProcessingState("error");
-            showToast("회의록 도출에 실패했습니다. 우측 화면의 재시도 버튼을 통해 다시 시도해 주세요.", "error");
+            showToast("회의록을 만들지 못했어요. 다시 시도 버튼을 눌러보세요.", "error");
           }
         };
 
         // Trigger first poll
         setTimeout(pollStatus, 1500);
       } else {
-        throw new Error(rawData.error || "회의록 예약 실패");
+        throw new Error(rawData.error || "회의록 분석 예약을 하지 못했어요.");
       }
     } catch (err: any) {
       console.error("Upload error:", err);
-      setErrorMessage(err.message || "서버 통신 오류가 발생했습니다.");
+      setErrorMessage(err.message || "서버와 통신하는 중에 오류가 생겼어요.");
       setProcessingState("error");
-      showToast("회의록 도출에 실패했습니다. 우측 화면의 재시도 버튼을 통해 다시 시도해 주세요.", "error");
+      showToast("회의록을 만들지 못했어요. 다시 시도 버튼을 눌러보세요.", "error");
     }
   };
 
-  // Retry the upload with the last recorded audio blob
-  const handleRetryUpload = async () => {
-    if (!lastAudioBlob) {
-      showToast("재시도할 오디오 데이터가 존재하지 않습니다.", "error");
+  // File Selection and Upload Handlers
+  const handleFileChange = (file: File) => {
+    if (!file.type.startsWith("audio/") && !/\.(mp3|wav|m4a|webm|ogg|flac|aac)$/i.test(file.name)) {
+      showToast("올바른 음성 파일이 아니에요. MP3, WAV, M4A, WEBM, AAC 파일을 올려주세요.", "error");
       return;
     }
+    if (file.size > 100 * 1024 * 1024) {
+      showToast("파일이 너무 커요. 100MB 이하인 음성 파일만 올릴 수 있어요.", "error");
+      return;
+    }
+    setLastUploadedFile(file);
+    setLastAudioBlob(null); // Clear recorder blob to avoid conflict
+    showToast(`${file.name} 파일을 선택했어요.`, "success");
+  };
+
+  const uploadExternalFileToServer = async (file: File) => {
+    if (!accessToken) {
+      showToast("구글 인증 세션이 끝났어요. 다시 로그인해주세요.", "error");
+      setProcessingState("idle");
+      return;
+    }
+
     setProcessingState("uploading");
-    setErrorMessage(null);
-    showToast("회의록 작성을 다시 시도합니다.", "info");
-    await uploadAudioToServer(lastAudioBlob);
+    setProgressPercentage(2);
+    setProgressMessage("음성 파일을 서버로 보낼 준비를 하고 있어요...");
+
+    try {
+      const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      const uploadId = `upload_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+
+      console.log(`Starting chunked upload of ${file.name} (${file.size} bytes): ${totalChunks} chunks`);
+
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const start = chunkIndex * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunkBlob = file.slice(start, end);
+
+        const formData = new FormData();
+        formData.append("chunk", chunkBlob, `chunk_${chunkIndex}`);
+        formData.append("chunkIndex", chunkIndex.toString());
+        formData.append("totalChunks", totalChunks.toString());
+        formData.append("uploadId", uploadId);
+
+        setProgressPercentage(Math.floor(2 + (chunkIndex / totalChunks) * 8));
+        setProgressMessage(`대용량 음성 파일을 보내고 있어요... (${chunkIndex + 1}/${totalChunks} 청크)`);
+
+        const chunkRes = await fetch("/api/meetings/upload-chunk", {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            Authorization: `Bearer ${accessToken}`
+          },
+          body: formData
+        });
+
+        const chunkContentType = chunkRes.headers.get("content-type");
+        if (!chunkContentType || !chunkContentType.includes("application/json")) {
+          const errText = await chunkRes.text();
+          throw new Error(`보내지 못했어요. 서버 응답 오류가 생겼어요.`);
+        }
+
+        if (!chunkRes.ok) {
+          const errData = await chunkRes.json();
+          throw new Error(errData.error || `보내지 못했어요. (상태 코드: ${chunkRes.status})`);
+        }
+
+        const chunkData = await chunkRes.json();
+        if (!chunkData.success) {
+          throw new Error(chunkData.error || "보내지 못했어요. 파일을 보내는 중에 오류가 생겼어요.");
+        }
+      }
+
+      setProgressPercentage(10);
+      setProgressMessage("음성 파일을 다 보냈어요. AI 분석을 준비하고 있어요...");
+
+      // Final process request with uploadId, mimeType, and fileName
+      const response = await fetch("/api/meetings/process", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({ 
+          uploadId,
+          mimeType: file.type || "audio/webm",
+          fileName: file.name
+        })
+      });
+
+      let rawData: any = null;
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        rawData = await response.json();
+      } else {
+        const errorText = await response.text();
+        throw new Error(`서버에서 올바르지 않은 응답을 받았어요. (상태 코드: ${response.status})`);
+      }
+
+      if (!response.ok) {
+        throw new Error(rawData?.error || `회의록 분석을 시작하지 못했어요.`);
+      }
+
+      if (rawData.success && rawData.jobId) {
+        const jobId = rawData.jobId;
+        setProgressPercentage(12);
+        setProgressMessage("회의 분석을 예약했어요. 백그라운드에서 분석을 시작할게요...");
+
+        // Polling function
+        const pollStatus = async () => {
+          try {
+            const statusRes = await fetch(`/api/meetings/status/${jobId}`, {
+              credentials: "include"
+            });
+            if (!statusRes.ok) {
+              throw new Error(`분석 상태를 확인하지 못했어요. (상태 코드: ${statusRes.status})`);
+            }
+            
+            const statusData = await statusRes.json();
+            if (!statusData.success) {
+              throw new Error(statusData.error || "작업 상태를 확인하지 못했어요.");
+            }
+
+            const { job } = statusData;
+            setProgressPercentage(job.progress);
+            setProgressMessage(job.message);
+
+            if (job.status === "completed") {
+              const result = job.result;
+              setMinutesResult(result.structuredNotes);
+              setSavedDocUrl(result.documentUrl);
+              setSavedDocId(result.documentId);
+              setSavedAudioUrl(result.audioUrl || null);
+              setProcessingState("completed");
+              showToast("회의록을 다 작성했어요.", "success");
+              fetchHistory(accessToken);
+            } else if (job.status === "failed") {
+              throw new Error(job.error || "회의록 분석을 하지 못했어요.");
+            } else {
+              // Wait 2.5 seconds and poll again
+              setTimeout(pollStatus, 2500);
+            }
+          } catch (pollErr: any) {
+            console.error("Polling error:", pollErr);
+            setErrorMessage(pollErr.message || "회의록 분석 상태를 확인하는 도중 오류가 생겼어요.");
+            setProcessingState("error");
+            showToast("회의록을 만들지 못했어요. 다시 시도 버튼을 눌러보세요.", "error");
+          }
+        };
+
+        // Trigger first poll
+        setTimeout(pollStatus, 1500);
+      } else {
+        throw new Error(rawData.error || "회의록 분석 예약을 하지 못했어요.");
+      }
+    } catch (err: any) {
+      console.error("Upload error:", err);
+      setErrorMessage(err.message || "서버와 통신하는 중에 오류가 생겼어요.");
+      setProcessingState("error");
+      showToast("회의록을 만들지 못했어요. 다시 시도 버튼을 눌러보세요.", "error");
+    }
   };
 
-  // Download the last recorded audio blob as a local webm backup file
-  const downloadBackupAudio = () => {
-    if (!lastAudioBlob) {
-      showToast("다운로드할 백업 오디오 데이터가 없습니다.", "error");
-      return;
+  // Retry the upload with the last recorded audio blob or last uploaded file
+  const handleRetryUpload = async () => {
+    if (lastUploadedFile) {
+      setProcessingState("uploading");
+      setErrorMessage(null);
+      showToast("회의록 분석을 다시 시도할게요.", "info");
+      await uploadExternalFileToServer(lastUploadedFile);
+    } else if (lastAudioBlob) {
+      setProcessingState("uploading");
+      setErrorMessage(null);
+      showToast("회의록을 다시 만들게요.", "info");
+      await uploadAudioToServer(lastAudioBlob);
+    } else {
+      showToast("다시 시도할 음성 파일이 없어요.", "error");
     }
-    const url = URL.createObjectURL(lastAudioBlob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `meeting_recording_backup_${Date.now()}.webm`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    showToast("회의 음성 파일 로컬 백업 저장이 시작되었습니다.", "success");
+  };
+
+  // Download the last recorded audio blob or uploaded file as backup
+  const downloadBackupAudio = () => {
+    if (lastUploadedFile) {
+      const url = URL.createObjectURL(lastUploadedFile);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = lastUploadedFile.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast("음성 파일 백업 저장을 시작했어요.", "success");
+    } else if (lastAudioBlob) {
+      const url = URL.createObjectURL(lastAudioBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `meeting_recording_backup_${Date.now()}.webm`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast("회의 음성 파일 백업 저장을 시작했어요.", "success");
+    } else {
+      showToast("다운로드할 백업용 음성 파일이 없어요.", "error");
+    }
   };
 
   // Render record elapsed time in format MM:SS
@@ -508,10 +689,10 @@ export default function App() {
           <div className="flex items-center gap-3">
             <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
             <div className="text-xs font-semibold text-slate-800 text-left leading-relaxed">
-              <strong className="text-amber-950 font-bold text-sm">⚠️ 브라우저 쿠키/세션 차단 우회 안내 (아이프레임 환경)</strong>
+              <strong className="text-amber-950 font-bold text-sm">⚠️ 안전한 이용을 위해 새 창에서 실행해보세요</strong>
               <p className="mt-1 text-slate-600">
-                현재 브라우저 보안 제약(아이프레임 환경)으로 인해 녹음 업로드 중 오류가 발생할 수 있습니다.<br />
-                오류가 발생하면 화면 우측 상단의 <strong className="text-indigo-600">'새 탭에서 열기 (Open in a new tab)'</strong> 아이콘을 클릭하여 새 탭에서 실행해 주시면 백업 걱정 없이 완벽하게 작동합니다!
+                지금 화면에서는 브라우저 보안 설정 때문에 녹음 파일을 올릴 때 오류가 날 수 있어요.<br />
+                오류가 생기면 오른쪽 위에 있는 <strong className="text-indigo-600">'새 창으로 열기'</strong> 아이콘이나 아래 버튼을 눌러 새 탭에서 열어보세요. 오류 걱정 없이 이용할 수 있어요!
               </p>
             </div>
           </div>
@@ -522,7 +703,7 @@ export default function App() {
             className="shrink-0 flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-850 text-white rounded-xl text-xs font-bold transition duration-150 shadow-sm cursor-pointer"
           >
             <ExternalLink className="w-3.5 h-3.5" />
-            새 탭에서 앱 실행
+            새 창에서 열기
           </button>
         </div>
       )}
@@ -565,20 +746,20 @@ export default function App() {
                   <AlertCircle className="w-6 h-6" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900">쿠키/세션 차단 안내</h3>
+                  <h3 className="text-lg font-bold text-slate-900">쿠키 설정을 확인해주세요</h3>
                   <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">Iframe Cookie Restriction</p>
                 </div>
               </div>
               
               <div className="space-y-3 text-sm text-slate-600 mb-6 leading-relaxed text-left">
                 <p>
-                  현재 브라우저 보안 정책(또는 사파리, iOS 환경)에 의해 <strong>아이프레임(iframe) 내에서의 서드파티 쿠키 설정이 차단</strong>되었습니다.
+                  지금 브라우저의 보안 정책 때문에 <strong>아이프레임 안에서 쿠키를 사용할 수 없어요.</strong>
                 </p>
                 <p>
-                  이로 인해 구글 로그인 세션 및 API 요청이 정상적으로 처리되지 못하고 쿠키 확인 페이지로 이동될 수 있습니다.
+                  이 때문에 구글 로그인이나 서비스가 제대로 작동하지 않을 수 있어요.
                 </p>
                 <p className="bg-indigo-50/50 p-3 rounded-xl border border-indigo-100 text-xs text-indigo-800 font-medium">
-                  💡 <strong>해결 방법:</strong> 우측 상단의 <strong>'새 탭에서 열기 (Open in a new tab)'</strong> 아이콘을 클릭하여 직접 앱을 실행하시거나, 아래 버튼을 통해 새 창으로 이동해 주세요.
+                  💡 <strong>이렇게 해결해보세요:</strong> 오른쪽 위에 있는 <strong>'새 창으로 열기'</strong> 아이콘을 클릭해 직접 앱을 실행하거나, 아래 버튼을 눌러 새 창으로 이동해주세요.
                 </p>
               </div>
 
@@ -590,7 +771,7 @@ export default function App() {
                   className="flex-1 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-semibold text-sm py-3 px-4 rounded-xl transition duration-150 flex items-center justify-center gap-2 shadow-md shadow-indigo-100 cursor-pointer"
                 >
                   <Sparkles className="w-4 h-4" />
-                  새 창에서 앱 실행하기
+                  새 창에서 실행하기
                 </button>
                 <button
                   onClick={() => setShowCookieWarning(false)}
@@ -659,7 +840,7 @@ export default function App() {
         {isAuthChecking ? (
           <div className="flex flex-col items-center justify-center py-20">
             <Loader2 className="w-10 h-10 text-emerald-500 animate-spin" />
-            <p className="text-slate-500 text-sm mt-4">사용자 로그인 확인 중입니다...</p>
+            <p className="text-slate-500 text-sm mt-4">로그인 상태를 확인하고 있어요...</p>
           </div>
         ) : !isAuthenticated ? (
           /* Authentication Screen (Unauthenticated Experience) */
@@ -672,24 +853,24 @@ export default function App() {
               <div className="w-16 h-16 bg-emerald-500/10 text-emerald-500 rounded-2xl mx-auto flex items-center justify-center mb-6">
                 <Mic className="w-8 h-8" />
               </div>
-              <h2 className="text-xl font-bold text-slate-900 tracking-tight">구글 연동 로그인</h2>
+              <h2 className="text-xl font-bold text-slate-900 tracking-tight">구글 계정으로 로그인해주세요</h2>
               <p className="text-sm text-slate-500 mt-2 mb-6 leading-relaxed">
-                본 서비스 이용을 위해서는 구글 연동 로그인이 필요합니다.
+                서비스를 이용하려면 구글 로그인이 필요해요.
               </p>
 
               {/* Microphone Hardware Permission Guide Highlight */}
               <div className="bg-amber-500/5 border border-amber-500/20 rounded-2xl p-4 md:p-5 text-left text-xs mb-6 space-y-2">
                 <p className="font-bold text-amber-950 flex items-center gap-1.5">
                   <Mic className="w-4 h-4 text-amber-600" />
-                  🎤 필수: 마이크 하드웨어 장치 권한 허용 안내
+                  🎤 마이크 권한을 허용해주세요
                 </p>
                 <div className="text-slate-600 leading-relaxed font-medium space-y-1">
-                  <p>음성 녹음 기능을 이용하기 위해서는 브라우저의 <strong>마이크 허용 권한</strong>이 필수적입니다.</p>
+                  <p>회의를 녹음하려면 브라우저의 <strong>마이크 권한</strong>을 꼭 허용해야 해요.</p>
                   <p className="pl-1.5 border-l-2 border-amber-500/35 mt-1 text-slate-500">
-                    * 설정 경로: 브라우저 주소창 왼쪽의 자물쇠 아이콘(혹은 설정 기호)을 눌러 마이크 권한이 활성으로 채택되었는지 확인해 주시기 바랍니다.
+                    * 설정하는 방법: 브라우저 주소창 왼쪽의 자물쇠 아이콘을 눌러 마이크 권한이 켜져 있는지 확인해주세요.
                   </p>
                   <p className="text-indigo-650 font-bold mt-1">
-                    * 만일 iFrame 차단에 막힐 경우 상단 설정 메뉴의 <strong>Open in New Tab</strong> 버튼을 눌러 새 탭에서 열어 수행하시면 아주 완벽히 가동됩니다.
+                    * 만약 화면 오류가 난다면 오른쪽 위 <strong>새 창으로 열기</strong> 버튼을 눌러 새 탭에서 실행해보세요. 아주 잘 작동해요.
                   </p>
                 </div>
               </div>
@@ -697,10 +878,10 @@ export default function App() {
               <div className="bg-slate-50 rounded-xl p-4 text-left border border-slate-200/60 mb-6 space-y-2">
                 <p className="text-xs text-indigo-950 font-bold flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-indigo-600"></span>
-                  임팩트스퀘어(@impactsquare.com) 맞춤 솔루션
+                  임팩트스퀘어 전용 회의록 서비스
                 </p>
                 <p className="text-[11px] text-slate-500 leading-normal pl-3">
-                  🏢 본 시스템은 <strong>@impactsquare.com</strong> 전용으로 미세조정된 AI 회의록 분석/보관 플랫폼입니다. 로그인 시 임팩트스퀘어 계정으로 안전하게 로그인 하십시오.
+                  🏢 이 서비스는 <strong>임팩트스퀘어 계정(@impactsquare.com)</strong> 전용으로 맞춤 설계한 AI 회의록 플랫폼이에요. 임팩트스퀘어 계정으로 로그인해주세요.
                 </p>
               </div>
 
@@ -714,7 +895,7 @@ export default function App() {
                   <path fill="#FBBC05" d="M5.27 14.12c-.25-.73-.39-1.5-.39-2.32s.14-1.59.39-2.32L1.28 6.61C.46 8.24 0 10.07 0 12s.46 3.76 1.28 5.39l3.99-3.27z" />
                   <path fill="#34A853" d="M12 24c3.24 0 5.97-1.07 7.96-2.91l-3.66-2.84c-1.01.68-2.31 1.09-3.8 1.09-3.13 0-5.79-1.78-6.73-4.18l-3.99 3.1C3.26 21.31 7.31 24 12 24z" />
                 </svg>
-                <span>Google 계정으로 로그인</span>
+                <span>Google 계정으로 로그인하기</span>
               </button>
             </motion.div>
           </div>
@@ -734,14 +915,14 @@ export default function App() {
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-sm font-bold text-indigo-950 flex items-center gap-1.5">
                     <FolderOpen className="w-4 h-4 text-indigo-600" />
-                    저장 폴더 바로가기
+                    저장한 폴더
                   </h2>
                   <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 uppercase tracking-wider">
-                    실시간 연동
+                    자동 저장 중
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 leading-relaxed mb-4">
-                  본 서비스가 생성한 구글 문서 및 음성 녹음 파일은 모두 구글 드라이브 내 <strong>"AI 회의록"</strong> 폴더에 저장됩니다.
+                  여기서 만든 구글 문서와 회의 음성 파일은 모두 구글 드라이브의 <strong>"AI 회의록"</strong> 폴더에 자동으로 저장돼요.
                 </p>
                 <a 
                   href={folderUrl} 
@@ -750,167 +931,320 @@ export default function App() {
                   className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 text-indigo-700 hover:text-indigo-800 rounded-2xl text-xs font-bold tracking-wide transition-all duration-200 shadow-sm group cursor-pointer"
                 >
                   <FolderOpen className="w-4 h-4 text-indigo-500 group-hover:scale-105 transition" />
-                  Google Drive 전용 폴더 바로열기
+                  구글 드라이브 폴더 열기
                 </a>
               </motion.div>
 
-              {/* Recording Board with Vibrant Waveform and Large Pulse Action buttons */}
+              {/* Recording & Uploading Board with dual-input tab modes */}
               <motion.div 
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="bg-white rounded-[40px] p-6 sm:p-8 flex flex-col justify-between shadow-xl shadow-indigo-150/30 border border-indigo-100/50 relative overflow-hidden"
               >
                 <div className="absolute top-6 right-6">
-                  {isRecording && !isPaused ? (
+                  {processingState === "recording" && !isPaused ? (
                     <span className="px-3.5 py-1 bg-red-100 text-red-600 rounded-full text-[9px] font-bold uppercase tracking-widest animate-pulse">
-                      Live Recording
+                      녹음 중
+                    </span>
+                  ) : processingState === "uploading" ? (
+                    <span className="px-3.5 py-1 bg-indigo-100 text-indigo-600 rounded-full text-[9px] font-bold uppercase tracking-widest animate-pulse">
+                      분석 중
                     </span>
                   ) : (
                     <span className="px-3.5 py-1 bg-indigo-50 text-indigo-600 rounded-full text-[9px] font-bold uppercase tracking-widest font-mono">
-                      Ready Stage
+                      준비 완료
                     </span>
                   )}
                 </div>
 
                 <div className="text-left mb-6">
-                  <h2 className="text-xl font-bold text-indigo-950">Meeting Recorder</h2>
-                  <p className="text-xs text-slate-400 font-medium">실시간 다이어프램 마이크 정밀 수집</p>
+                  <h2 className="text-xl font-bold text-indigo-950">회의록 만들기</h2>
+                  <p className="text-xs text-slate-400 font-medium">음성을 분석해 똑똑한 회의록을 만들어요</p>
                 </div>
 
-                {/* Waveform Visualization Animation */}
-                <div className="my-6">
-                  <div className="flex items-center justify-center gap-1.5 h-16 bg-gradient-to-tr from-indigo-50/30 to-indigo-50/10 rounded-2xl border border-indigo-50/30 p-4">
-                    <div className={`w-1.5 bg-indigo-400 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-6 animate-pulse" : "h-2"}`}></div>
-                    <div className={`w-1.5 bg-indigo-500 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-12 animate-pulse" : "h-3"}`}></div>
-                    <div className={`w-1.5 bg-indigo-600 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-14 animate-pulse" : "h-1.5"}`}></div>
-                    <div className={`w-1.5 bg-indigo-400 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-8 animate-pulse" : "h-3"}`}></div>
-                    <div className={`w-1.5 bg-indigo-300 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-10 animate-pulse" : "h-2"}`}></div>
-                    <div className={`w-1.5 bg-indigo-600 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-14 animate-pulse" : "h-3.5"}`}></div>
-                    <div className={`w-1.5 bg-indigo-500 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-11 animate-pulse" : "h-2"}`}></div>
-                    <div className={`w-1.5 bg-indigo-400 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-6 animate-pulse" : "h-3"}`}></div>
-                  </div>
+                {/* Mode Switcher */}
+                <div className="flex bg-slate-100 p-1 rounded-2xl mb-6 border border-slate-200/40 shrink-0">
+                  <button
+                    onClick={() => {
+                      if (processingState === "recording" || processingState === "uploading") return;
+                      setInputMode("record");
+                    }}
+                    disabled={processingState === "recording" || processingState === "uploading"}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer ${
+                      inputMode === "record"
+                        ? "bg-white text-indigo-700 shadow-sm border border-slate-200/30 font-extrabold"
+                        : "text-slate-500 hover:text-slate-800"
+                    } disabled:opacity-50 disabled:cursor-not-allowed`}
+                  >
+                    <Mic className="w-3.5 h-3.5" />
+                    실시간 녹음하기
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (processingState === "recording" || processingState === "uploading") return;
+                      setInputMode("upload");
+                    }}
+                    disabled={processingState === "recording" || processingState === "uploading"}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold transition-all duration-150 cursor-pointer ${
+                      inputMode === "upload"
+                        ? "bg-white text-indigo-700 shadow-sm border border-slate-200/30 font-extrabold"
+                        : "text-slate-500 hover:text-slate-800"
+                    } disabled:opacity-50 disabled:cursor-not-allowed`}
+                  >
+                    <FolderOpen className="w-3.5 h-3.5" />
+                    음성 파일 올리기
+                  </button>
                 </div>
 
-                <div className="flex flex-col items-center gap-4">
-                  {/* Timer Display */}
-                  <div className="text-5xl font-mono font-bold text-slate-800 tracking-tighter">
-                    {formatTime(recordingTime).split(":")[0]}:<span className="text-indigo-600">{formatTime(recordingTime).split(":")[1]}</span>
-                  </div>
+                {inputMode === "record" ? (
+                  /* Real-time Recording Panel */
+                  <div className="space-y-6">
+                    {/* Waveform Visualization Animation */}
+                    <div>
+                      <div className="flex items-center justify-center gap-1.5 h-16 bg-gradient-to-tr from-indigo-50/30 to-indigo-50/10 rounded-2xl border border-indigo-50/30 p-4">
+                        <div className={`w-1.5 bg-indigo-400 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-6 animate-pulse" : "h-2"}`}></div>
+                        <div className={`w-1.5 bg-indigo-500 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-12 animate-pulse" : "h-3"}`}></div>
+                        <div className={`w-1.5 bg-indigo-600 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-14 animate-pulse" : "h-1.5"}`}></div>
+                        <div className={`w-1.5 bg-indigo-400 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-8 animate-pulse" : "h-3"}`}></div>
+                        <div className={`w-1.5 bg-indigo-300 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-10 animate-pulse" : "h-2"}`}></div>
+                        <div className={`w-1.5 bg-indigo-600 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-14 animate-pulse" : "h-3.5"}`}></div>
+                        <div className={`w-1.5 bg-indigo-500 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-11 animate-pulse" : "h-2"}`}></div>
+                        <div className={`w-1.5 bg-indigo-400 rounded-full transition-all duration-300 ${isRecording && !isPaused ? "h-6 animate-pulse" : "h-3"}`}></div>
+                      </div>
+                    </div>
 
-                  <div className="h-6">
-                    <AnimatePresence mode="wait">
-                      {processingState === "recording" && (
-                        <motion.p 
-                          initial={{ opacity: 0, y: 5 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0 }}
-                          className="text-xs font-bold text-indigo-600"
-                        >
-                          {isPaused ? "⚠️ 녹음 일시 정지됨" : "● 현재 실시간 녹음 중..."}
-                        </motion.p>
-                      )}
-                      {processingState === "uploading" && (
-                        <motion.div 
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          exit={{ opacity: 0 }}
-                          className="flex flex-col items-center gap-1.5 w-full max-w-[240px] px-2"
-                        >
-                          <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-600 text-center justify-center">
-                            <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-500 shrink-0" />
-                            <span>{progressMessage || "분석 기동 중..."}</span>
-                          </div>
-                          <div className="w-full bg-indigo-100 rounded-full h-1 overflow-hidden">
-                            <div 
-                              className="bg-indigo-600 h-1 rounded-full transition-all duration-300" 
-                              style={{ width: `${progressPercentage}%` }}
-                            ></div>
-                          </div>
-                          <span className="text-[9px] font-mono font-bold text-indigo-400">
-                            {progressPercentage}% 완료
-                          </span>
-                        </motion.div>
-                      )}
-                      {processingState === "completed" && (
-                        <motion.p 
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          className="text-xs font-bold text-emerald-600"
-                        >
-                          ✓ 회의록 보고서 발행 완료
-                        </motion.p>
-                      )}
-                      {processingState === "error" && (
-                        <motion.p 
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          className="text-xs font-bold text-rose-500"
-                        >
-                          ⚠️ 분석 실패
-                        </motion.p>
-                      )}
-                      {processingState === "idle" && (
-                        <p className="text-xs text-slate-400 font-semibold">대기</p>
-                      )}
-                    </AnimatePresence>
-                  </div>
+                    <div className="flex flex-col items-center gap-4">
+                      {/* Timer Display */}
+                      <div className="text-5xl font-mono font-bold text-slate-800 tracking-tighter">
+                        {formatTime(recordingTime).split(":")[0]}:<span className="text-indigo-600">{formatTime(recordingTime).split(":")[1]}</span>
+                      </div>
 
-                  {/* UI Action Control Suite matching design guidelines */}
-                  <div className="flex gap-4 justify-center items-center w-full mt-2">
-                    {!isRecording ? (
-                      <button
-                        onClick={startRecording}
-                        disabled={processingState === "uploading"}
-                        className="w-full py-4 bg-indigo-600 text-white rounded-[24px] font-bold text-sm hover:scale-[1.02] shadow-lg shadow-indigo-150 active:scale-95 transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                      >
-                        <Play className="w-4 h-4 fill-white" />
-                        회의 녹음 시작
-                      </button>
-                    ) : (
-                      <div className="flex items-center gap-4 w-full justify-center">
-                        {isPaused ? (
+                      <div className="h-6">
+                        <AnimatePresence mode="wait">
+                          {processingState === "recording" && (
+                            <motion.p 
+                              initial={{ opacity: 0, y: 5 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0 }}
+                              className="text-xs font-bold text-indigo-600"
+                            >
+                              {isPaused ? "⚠️ 녹음을 일시 정지했어요" : "● 지금 실시간으로 녹음하고 있어요"}
+                            </motion.p>
+                          )}
+                          {processingState === "uploading" && (
+                            <motion.div 
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              exit={{ opacity: 0 }}
+                              className="flex flex-col items-center gap-1.5 w-full max-w-[240px] px-2"
+                            >
+                              <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-600 text-center justify-center">
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-500 shrink-0" />
+                                <span>{progressMessage || "분석하고 있어요..."}</span>
+                              </div>
+                              <div className="w-full bg-indigo-100 rounded-full h-1 overflow-hidden">
+                                <div 
+                                  className="bg-indigo-600 h-1 rounded-full transition-all duration-300" 
+                                  style={{ width: `${progressPercentage}%` }}
+                                  id="progress_bar"
+                                ></div>
+                              </div>
+                              <span className="text-[9px] font-mono font-bold text-indigo-400">
+                                {progressPercentage}% 진행 중
+                              </span>
+                            </motion.div>
+                          )}
+                          {processingState === "completed" && (
+                            <motion.p 
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              className="text-xs font-bold text-emerald-600"
+                            >
+                              ✓ 회의록을 완성했어요
+                            </motion.p>
+                          )}
+                          {processingState === "error" && (
+                            <motion.p 
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              className="text-xs font-bold text-rose-500"
+                            >
+                              ⚠️ 분석에 실패했어요
+                            </motion.p>
+                          )}
+                          {processingState === "idle" && (
+                            <p className="text-xs text-slate-400 font-semibold">준비 완료</p>
+                          )}
+                        </AnimatePresence>
+                      </div>
+
+                      {/* UI Action Control Suite matching design guidelines */}
+                      <div className="flex gap-4 justify-center items-center w-full mt-2">
+                        {!isRecording ? (
                           <button
-                            onClick={resumeRecording}
-                            className="w-16 h-16 bg-indigo-600 text-white rounded-[20px] flex items-center justify-center shadow-md shadow-indigo-100/50 hover:scale-105 active:scale-95 transition-transform cursor-pointer"
-                            title="다시 재개"
+                            onClick={startRecording}
+                            disabled={processingState === "uploading"}
+                            className="w-full py-4 bg-indigo-600 text-white rounded-[24px] font-bold text-sm hover:scale-[1.02] shadow-lg shadow-indigo-150 active:scale-95 transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                           >
-                            <Play className="w-5 h-5 fill-white text-white" />
+                            <Play className="w-4 h-4 fill-white" />
+                            녹음 시작하기
                           </button>
                         ) : (
-                          <button
-                            onClick={pauseRecording}
-                            className="w-16 h-16 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-[20px] flex items-center justify-center border-2 border-slate-50 hover:scale-105 active:scale-95 transition-transform cursor-pointer"
-                            title="일시 정지"
-                          >
-                            <Pause className="w-5 h-5 fill-slate-700 text-slate-750" />
-                          </button>
+                          <div className="flex items-center gap-4 w-full justify-center">
+                            {isPaused ? (
+                              <button
+                                onClick={resumeRecording}
+                                className="w-16 h-16 bg-indigo-600 text-white rounded-[20px] flex items-center justify-center shadow-md shadow-indigo-100/50 hover:scale-105 active:scale-95 transition-transform cursor-pointer"
+                                title="다시 재개"
+                              >
+                                <Play className="w-5 h-5 fill-white text-white" />
+                              </button>
+                            ) : (
+                              <button
+                                onClick={pauseRecording}
+                                className="w-16 h-16 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-[20px] flex items-center justify-center border-2 border-slate-50 hover:scale-105 active:scale-95 transition-transform cursor-pointer"
+                                title="일시 정지"
+                              >
+                                <Pause className="w-5 h-5 fill-slate-700 text-slate-750" />
+                              </button>
+                            )}
+                            <button
+                              onClick={stopRecording}
+                              className="w-20 h-20 bg-red-500 text-white rounded-[28px] flex items-center justify-center shadow-lg shadow-red-200 hover:scale-105 active:scale-95 transition-transform cursor-pointer"
+                              title="회의 종료 및 전송 분석"
+                            >
+                              <Square className="w-7 h-7 fill-white text-white" />
+                            </button>
+                          </div>
                         )}
-                        <button
-                          onClick={stopRecording}
-                          className="w-20 h-20 bg-red-500 text-white rounded-[28px] flex items-center justify-center shadow-lg shadow-red-200 hover:scale-105 active:scale-95 transition-transform cursor-pointer"
-                          title="회의 종료 및 전송 분석"
-                        >
-                          <Square className="w-7 h-7 fill-white text-white" />
-                        </button>
+                      </div>
+                    </div>
+
+                    {/* Microphone Hardware Access Assistant for Recorder Panel */}
+                    <div className="mt-6 bg-amber-500/5 p-4 rounded-3xl border border-amber-500/20 text-[11px] text-slate-700 text-left leading-relaxed flex items-start gap-2.5">
+                      <Mic className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <span>
+                        <strong>마이크 권한을 확인해주세요</strong>: 회의 음성을 깨끗하게 기록하려면 브라우저의 <strong>마이크 권한</strong>을 허용해야 해요. 주소창 왼쪽 자물쇠 아이콘을 눌러 마이크 권한을 [허용]으로 켜주세요.
+                      </span>
+                    </div>
+
+                    <div className="mt-4 bg-slate-50 p-4 rounded-3xl border border-slate-100 text-[11px] text-slate-500 text-left leading-relaxed flex items-start gap-2.5">
+                      <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                      <span>
+                        "녹음 완료"를 누르면 음성 파일이 구글 드라이브에 저장되고 자동으로 문서 회의록이 만들어져요.
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  /* Audio File Upload Panel with unified Drag & Drop support */
+                  <div className="space-y-5">
+                    {!lastUploadedFile ? (
+                      <div
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const file = e.dataTransfer.files?.[0];
+                          if (file) handleFileChange(file);
+                        }}
+                        onClick={() => {
+                          const fileInput = document.getElementById("audio-file-input");
+                          fileInput?.click();
+                        }}
+                        className="border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50/20 hover:bg-indigo-50/45 rounded-3xl p-8 flex flex-col items-center justify-center gap-3 cursor-pointer transition-all duration-200 group min-h-[180px]"
+                      >
+                        <input
+                          type="file"
+                          id="audio-file-input"
+                          accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg,.flac,.aac"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleFileChange(file);
+                          }}
+                        />
+                        <div className="w-12 h-12 bg-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center group-hover:scale-105 transition duration-200 shadow-sm">
+                           <FolderOpen className="w-6 h-6 text-indigo-600" />
+                        </div>
+                        <div className="text-center">
+                          <p className="text-xs font-bold text-slate-800">음성 파일 선택하기</p>
+                          <p className="text-[10px] text-slate-400 mt-1">이곳에 음성 파일을 끌어다 놓거나 클릭해서 올려주세요</p>
+                        </div>
+                        <span className="text-[9px] font-mono font-bold bg-indigo-50 text-indigo-600 border border-indigo-100/50 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                          MP3, WAV, M4A, WEBM, AAC (최대 100MB)
+                        </span>
+                      </div>
+                    ) : (
+                      /* Selected Audio File Container card */
+                      <div className="bg-indigo-50/30 border border-indigo-100/80 rounded-3xl p-5 flex flex-col gap-4 text-left">
+                        <div className="flex items-center gap-3">
+                          <div className="w-11 h-11 bg-indigo-100 rounded-2xl flex items-center justify-center text-indigo-600 shrink-0">
+                            <FileText className="w-5 h-5 text-indigo-600" />
+                          </div>
+                          <div className="truncate flex-1">
+                            <h4 className="text-xs font-bold text-indigo-950 truncate">{lastUploadedFile.name}</h4>
+                            <p className="text-[10px] text-slate-400 font-bold font-mono leading-none mt-1">
+                              {(lastUploadedFile.size / (1024 * 1024)).toFixed(2)} MB • {lastUploadedFile.name.split('.').pop()?.toUpperCase() || "AUDIO"}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              setLastUploadedFile(null);
+                              showToast("선택한 파일을 지웠어요.", "info");
+                            }}
+                            disabled={processingState === "uploading"}
+                            className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-slate-100 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                            title="파일 해제"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
+
+                        {processingState === "uploading" && (
+                          <div className="flex flex-col gap-1.5 w-full bg-white p-4 rounded-2xl border border-indigo-100/40">
+                            <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-600">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-500 shrink-0" />
+                              <span>{progressMessage || "보내고 있어요..."}</span>
+                            </div>
+                            <div className="w-full bg-indigo-100 rounded-full h-1 overflow-hidden mt-1">
+                              <div 
+                                className="bg-indigo-600 h-1 rounded-full transition-all duration-300" 
+                                style={{ width: `${progressPercentage}%` }}
+                              ></div>
+                            </div>
+                            <span className="text-[9px] font-mono font-bold text-indigo-400 self-end mt-0.5">
+                              {progressPercentage}% 진행 중
+                            </span>
+                          </div>
+                        )}
+
+                        {processingState !== "uploading" && (
+                          <div className="flex gap-3">
+                            <button
+                              onClick={() => uploadExternalFileToServer(lastUploadedFile)}
+                              className="flex-1 py-3.5 bg-indigo-600 text-white rounded-[18px] font-bold text-xs hover:scale-[1.02] shadow-md shadow-indigo-100 active:scale-95 transition-all duration-150 flex items-center justify-center gap-1.5 cursor-pointer"
+                            >
+                              <Sparkles className="w-3.5 h-3.5 text-indigo-200 animate-pulse" />
+                              회의록 AI 분석 시작하기
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
+
+                    <div className="bg-slate-50 p-4 rounded-3xl border border-slate-100 text-[11px] text-slate-500 text-left leading-relaxed flex items-start gap-2.5">
+                      <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                      <span>
+                        스마트폰 녹음기나 줌(Zoom)에서 저장한 파일도 똑같이 올릴 수 있어요. 분석이 끝나면 구글 드라이브 <strong>"AI 회의록"</strong> 폴더에 원본 음성과 구글 문서 회의록이 함께 안전하게 저장돼요.
+                      </span>
+                    </div>
                   </div>
-                </div>
-
-                {/* Microphone Hardware Access Assistant for Recorder Panel */}
-                <div className="mt-6 bg-amber-500/5 p-4 rounded-3xl border border-amber-500/20 text-[11px] text-slate-700 text-left leading-relaxed flex items-start gap-2.5">
-                  <Mic className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                  <span>
-                    <strong>[필수 마이크 제어 가이드]</strong>: 회의 음성을 깔끔하게 분석하기 위해서 브라우저 <strong>마이크 허용 권한</strong>이 설정되어야 합니다. 브라우저 주소 기입창 좌측 자물쇠나 설정 슬라이더 아이콘을 클릭한 다음 상시 마이크 전송을 [허용]으로 두십시오. (불통시 Open in New Tab 버튼 지원)
-                  </span>
-                </div>
-
-                <div className="mt-4 bg-slate-50 p-4 rounded-3xl border border-slate-100 text-[11px] text-slate-500 text-left leading-relaxed flex items-start gap-2.5">
-                  <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
-                  <span>
-                    "회의 완료 및 분석" 시, 음성 녹음 파일이 구글 드라이브 문서 파일로 변환되어 자동 생성됩니다.
-                  </span>
-                </div>
+                )}
               </motion.div>
 
               {/* History Search Logs list inside White Beautiful Container */}
@@ -1010,7 +1344,7 @@ export default function App() {
                     </div>
                     
                     <h2 className="text-lg font-bold text-indigo-950 tracking-tight">
-                      {progressMessage || "AI 회의록 분해 및 구조화 분석 중..."}
+                      {progressMessage || "AI가 회의 내용을 분석하고 있어요..."}
                     </h2>
                     
                     {/* Big progress layout */}
@@ -1022,13 +1356,13 @@ export default function App() {
                         ></div>
                       </div>
                       <div className="flex justify-between items-center text-[10px] font-bold text-indigo-500 font-mono tracking-wider mt-2 px-1">
-                        <span>STAGE PROGRESS</span>
-                        <span>{progressPercentage}% COMPLETED</span>
+                        <span>진행 상황</span>
+                        <span>{progressPercentage}% 완료</span>
                       </div>
                     </div>
 
                     <p className="text-xs text-slate-500 mt-4 max-w-sm mx-auto leading-relaxed font-medium">
-                      구글 드라이브와 문서를 검토하고, 전송을 마친 음성 바이너리 데이터를 바탕으로 <strong>안건, 논의사항, 합의결과 및 액션 플랜(할 일)</strong>을 정교하게 다듬고 있습니다. 잠시만 허용해 주시기 바랍니다.
+                      음성 파일과 구글 드라이브를 확인해 <strong>안건, 논의 내용, 합의 결과, 할 일(액션 플랜)</strong>을 꼼꼼하게 정리하고 있어요. 조금만 기다려주세요.
                     </p>
                   </motion.div>
                 ) : processingState === "completed" && minutesResult ? (
@@ -1042,8 +1376,8 @@ export default function App() {
                     {/* Header bar */}
                     <div className="p-6 bg-gradient-to-tr from-indigo-900 via-indigo-950 to-slate-900 text-white border-b border-indigo-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div className="text-left">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[9px] font-bold bg-indigo-500 text-white mb-2 font-mono uppercase tracking-wider">
-                          DOCUMENT SYNCHRONIZED
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[9px] font-bold bg-indigo-500 text-white mb-2 uppercase tracking-wider">
+                          문서 동기화 완료
                         </span>
                         <h2 className="text-lg font-bold tracking-tight">{minutesResult.title}</h2>
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-slate-300 text-xs font-semibold">
@@ -1069,7 +1403,7 @@ export default function App() {
                             className="flex items-center justify-center gap-2 px-4.5 py-2.5 bg-indigo-50/10 hover:bg-indigo-50/20 text-indigo-200 border border-indigo-500/20 rounded-xl text-xs font-bold tracking-wide transition cursor-pointer"
                           >
                             <Mic className="w-4 h-4 text-indigo-400" />
-                            G-Drive 음성 녹음 열기
+                            G-Drive 음성 파일 열기
                           </a>
                         )}
                         {savedDocUrl && (
@@ -1080,7 +1414,7 @@ export default function App() {
                             className="flex items-center justify-center gap-2 px-4.5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold tracking-wide transition shadow-md shadow-indigo-900/10 cursor-pointer"
                           >
                             <FileText className="w-4 h-4 text-white" />
-                            Google Docs 열기
+                            구글 문서 열기
                           </a>
                         )}
                       </div>
@@ -1093,8 +1427,8 @@ export default function App() {
                       <div className="bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-2xl flex items-start gap-3">
                         <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
                         <div className="text-xs text-emerald-800 text-left">
-                          <p className="font-semibold">회의 백서 및 드라이브 문서 구축에 완벽 동기화되었습니다.</p>
-                          <p className="mt-1 text-emerald-700/95 font-medium">새문서 ID: <span className="font-mono bg-white px-1.5 py-0.5 rounded border border-emerald-250">{savedDocId}</span></p>
+                          <p className="font-semibold">회의록과 드라이브 문서가 안전하게 저장되었어요.</p>
+                          <p className="mt-1 text-emerald-700/95 font-medium">새 문서 ID: <span className="font-mono bg-white px-1.5 py-0.5 rounded border border-emerald-250">{savedDocId}</span></p>
                         </div>
                       </div>
 
@@ -1113,7 +1447,7 @@ export default function App() {
                               </li>
                             ))
                           ) : (
-                            <li className="text-xs text-slate-400 italic font-medium">감지된 안건이 특별히 표기되지 않았습니다.</li>
+                            <li className="text-xs text-slate-400 italic font-medium">회의에서 다룬 안건이 없어요.</li>
                           )}
                         </ul>
                       </div>
@@ -1133,7 +1467,7 @@ export default function App() {
                               </li>
                             ))
                           ) : (
-                            <li className="text-xs text-slate-400 italic font-medium">논의 내용 정보 분석이 비어있습니다.</li>
+                            <li className="text-xs text-slate-400 italic font-medium">회의에서 나눈 논의 내용이 없어요.</li>
                           )}
                         </ul>
                       </div>
@@ -1155,7 +1489,7 @@ export default function App() {
                               </div>
                             ))
                           ) : (
-                            <p className="text-xs text-slate-400 italic">금번 회의에서 기록 조서된 특별 결정사항이 없습니다.</p>
+                            <p className="text-xs text-slate-400 italic">회의에서 합의된 결정사항이 없어요.</p>
                           )}
                         </div>
                       </div>
@@ -1186,7 +1520,7 @@ export default function App() {
                             ))}
                           </div>
                         ) : (
-                          <p className="text-xs text-slate-400 italic font-medium pl-1.5">정규화된 추가 후속 업무 스케줄이 부재합니다.</p>
+                          <p className="text-xs text-slate-400 italic font-medium pl-1.5">앞으로 진행할 할 일이 등록되지 않았어요.</p>
                         )}
                       </div>
 
@@ -1201,7 +1535,7 @@ export default function App() {
                             {minutesResult.transcript}
                           </div>
                         ) : (
-                          <p className="text-xs text-slate-400 italic font-medium pl-1.5">제출된 오디오로부터 해독 데이터가 존재하지 않습니다.</p>
+                          <p className="text-xs text-slate-400 italic font-medium pl-1.5">음성 파일에서 변환된 텍스트가 없어요.</p>
                         )}
                       </div>
 
@@ -1219,12 +1553,12 @@ export default function App() {
                     <div className="w-20 h-20 bg-rose-50 rounded-[24px] flex items-center justify-center text-rose-500 mb-6 relative">
                       <AlertCircle className="w-10 h-10 text-rose-600" />
                     </div>
-                    <h3 className="text-md font-bold text-rose-950">회의록 작성 실패</h3>
+                    <h3 className="text-md font-bold text-rose-950">회의록을 만들지 못했어요</h3>
                     <p className="text-xs text-rose-600 font-semibold mt-2.5 max-w-sm leading-relaxed">
-                      {errorMessage || "회의 분석 진행 중 서버 오류가 발생했습니다."}
+                      {errorMessage || "회의 내용을 분석하는 도중 오류가 발생했어요."}
                     </p>
                     <p className="text-[11px] text-slate-400 mt-2.5 max-w-sm leading-relaxed font-medium">
-                      네트워크 상태가 일시적으로 불안정하거나, AI 모델 또는 구글 드라이브 연동 과정에 차질이 있었을 수 있습니다. 아래 버튼을 눌러 회의록 작성을 다시 시도할 수 있습니다.
+                      네트워크 연결이 일시적으로 불안정하거나, 구글 드라이브 연동에 문제가 생겼을 수 있어요. 다시 한번 시도해보세요.
                     </p>
                     {lastAudioBlob && (
                       <div className="flex flex-col sm:flex-row gap-3 mt-6 w-full justify-center max-w-md">
@@ -1233,14 +1567,14 @@ export default function App() {
                           className="flex-1 flex items-center justify-center gap-2 px-5 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-xs font-bold shadow-lg shadow-indigo-150 active:scale-95 transition-all duration-200 cursor-pointer"
                         >
                           <RefreshCw className="w-4 h-4" />
-                          회의록 분석 재시도
+                          다시 시도하기
                         </button>
                         <button
                           onClick={downloadBackupAudio}
                           className="flex-1 flex items-center justify-center gap-2 px-5 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-bold shadow-lg shadow-emerald-150 active:scale-95 transition-all duration-200 cursor-pointer"
                         >
                           <Download className="w-4 h-4" />
-                          녹음 백업 다운로드 (.webm)
+                          녹음 파일 다운로드
                         </button>
                       </div>
                     )}
@@ -1257,9 +1591,9 @@ export default function App() {
                       <FileText className="w-9 h-9 text-indigo-600" />
                       <Mic className="w-4 h-4 text-indigo-500 absolute bottom-3 right-3 shrink-0" />
                     </div>
-                    <h3 className="text-md font-bold text-indigo-950">회의 분석 관제 대기</h3>
+                    <h3 className="text-md font-bold text-indigo-950">회의록을 만들 준비가 되었어요</h3>
                     <p className="text-xs text-slate-400 mt-2.5 max-w-sm leading-relaxed font-semibold">
-                      좌측 마이크 제어 장치에서 <strong>'회의 녹음 시작'</strong>을 누른 후 가볍게 대화를 나누어보세요. 오디오 전사 후 고도로 다각적이고 입체적인 <strong>AI 보고서 및 회의록</strong>을 생성해 드립니다.
+                      왼쪽에서 회의 녹음을 시작하거나 음성 파일을 올려주세요. 회의가 끝나면 AI가 회의록을 자동으로 만들어 드릴게요.
                     </p>
                   </motion.div>
                 )}
@@ -1271,15 +1605,10 @@ export default function App() {
 
       </main>
 
-      {/* Footer Status Bar matching Vibrant Palette */}
-      <footer className="mt-12 mb-6 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center text-[10px] font-bold uppercase tracking-[0.2em] text-indigo-400 flex-wrap gap-4 pt-6 border-t border-indigo-100/40">
-        <div className="flex gap-6 flex-wrap font-bold">
-          <span>STORAGE: AUTOSYNC RUNNING</span>
-          <span>REGION: ASIA-NORTHEAST1</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></div>
-          <span>ALL PLATFORM SERVICES RUNNING</span>
+      {/* Footer matching Vibrant Palette */}
+      <footer className="mt-12 mb-6 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center text-[10px] text-slate-400 font-medium pt-6 border-t border-indigo-100/40">
+        <div>
+          <span>© AI Meeting Minutes Service. All rights reserved.</span>
         </div>
       </footer>
 

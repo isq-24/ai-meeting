@@ -235,7 +235,7 @@ async function processAudioJob(
       }
     };
 
-    updateJob(5, "음성 파일 분석을 준비하고 있습니다...");
+    updateJob(5, "음성 파일을 분석할 준비를 하고 있어요...");
 
     // Standard fallback mime mapping if webm audio format
     let mimeType = mimetype;
@@ -244,7 +244,7 @@ async function processAudioJob(
     }
 
     const aiClient = getAIClient();
-    updateJob(15, "구글 Gemini AI 분석 엔진에 음성 데이터를 안전하게 업로드 중입니다...");
+    updateJob(15, "음성 파일을 AI 분석 엔진에 안전하게 보내고 있어요...");
     uploadedGenAIFile = await aiClient.files.upload({
       file: tempFilePath,
       config: {
@@ -260,7 +260,7 @@ async function processAudioJob(
     while (fileState === "PROCESSING" && attempts < 30) {
       updateJob(
         Math.min(15 + attempts * 2, 40),
-        `Gemini AI에서 고해상도 음성 신호를 분석 중입니다... (대기시간 ${attempts * 2}초)`
+        "AI가 음성 신호를 분석하고 있어요..."
       );
       try {
         const fileInfo = await aiClient.files.get({ name: uploadedGenAIFile.name });
@@ -279,7 +279,7 @@ async function processAudioJob(
       attempts++;
     }
 
-    updateJob(45, "음성 파일에서 화자를 식별하며 전사 녹취 스크립트(STT)를 정밀 복원 중입니다...");
+    updateJob(45, "회의 참석자분들의 목소리를 구분하며 대화 내용을 기록하고 있어요...");
 
     // 1단계: 고정밀 무손실 전사(STT) 수행 (Plain Text 출력으로 JSON 파싱 실패 차단 및 무손실 전사 보장)
     const transcribingPrompt = `당신은 최고 성능의 한국어 음성 전사(STT) 엔진이자 전문 비서입니다.
@@ -311,7 +311,7 @@ async function processAudioJob(
       throw new Error("음성 파일 전사(STT) 결과물이 비어있거나 생성에 실패했습니다.");
     }
 
-    updateJob(55, "전사된 텍스트를 고도 분석하여 주요 안건, 결정사항 및 실행 과제(To-Do)를 도출하고 있습니다...");
+    updateJob(55, "전사된 텍스트에서 주요 안건, 결정사항, 할 일을 정리하고 있어요...");
 
     // 2단계: 텍스트 기반 수석 비즈니스 회의록 자동 요약 및 구조화 (비용이 저렴한 텍스트 입력으로 API 호출, 출력 JSON에서 대형 transcript를 제외하여 토큰 절감 및 잘림 붕괴 원천 차단)
     const summaryPrompt = `당신은 IT 프로덕트 개발 및 비즈니스 회의록 분석 전문가입니다. 제공된 회의 전사 스크립트를 정밀 분석하여, 실행 중심의 고도로 구조화된 '수석 비즈니스 회의록'을 생성해 주십시오.
@@ -385,7 +385,7 @@ async function processAudioJob(
       throw new Error("Gemini 모델로부터 회의록 요약 분석 결과를 받지 못했습니다.");
     }
 
-    updateJob(65, "AI 회의록 분석 및 가공 결과를 수집하여 표준 규격으로 구조화하는 중입니다...");
+    updateJob(65, "회의록 내용을 수집해서 보기 좋게 정리하고 있어요...");
 
     // Clean or Parse Gemini response
     let structuredNotesRaw: any;
@@ -421,7 +421,7 @@ async function processAudioJob(
 
     console.log("Normalized Structured Meeting Notes prepared successfully:", structuredNotes);
 
-    updateJob(75, "구글 드라이브(Google Drive)에 회의록 저장 전용 폴더를 탐색 중입니다...");
+    updateJob(75, "구글 드라이브에서 회의록을 저장할 폴더를 찾고 있어요...");
 
     // Get or Create Drive folder "AI 회의록"
     const folderId = await getOrCreateFolder(accessToken);
@@ -430,9 +430,10 @@ async function processAudioJob(
     }
 
     const docTitle = `${yymmdd} / ${structuredNotes.title}`;
-    const rawAudioTitle = `${yymmdd} / ${structuredNotes.title}.webm`;
+    const extName = path.extname(originalFilename) || ".webm";
+    const rawAudioTitle = `${yymmdd} / ${structuredNotes.title}${extName}`;
 
-    updateJob(80, "녹음된 원본 음성 파일을 구글 드라이브(Google Drive)에 동기화 업로드 중입니다...");
+    updateJob(80, "음성 원본 파일을 구글 드라이브에 안전하게 올리고 있어요...");
 
     let audioFileUrlOnDrive = null;
     let audioFileIdOnDrive = null;
@@ -491,7 +492,7 @@ async function processAudioJob(
       console.error("Exception in audio file upload to Google Drive:", audioUploadErr);
     }
 
-    updateJob(85, "구글 문서도구(Google Docs)에 회의록 서식을 구성하고 작성하는 중입니다...");
+    updateJob(85, "구글 문서에 회의록 내용을 꼼꼼하게 채워 넣고 있어요...");
 
     const createDocRes = await fetch("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true", {
       method: "POST",
@@ -661,7 +662,7 @@ async function processAudioJob(
       currentPos += textLen;
     }
 
-    updateJob(90, "작성된 회의록 내용을 구글 문서(Google Docs)에 최종 배치 업로드 중입니다...");
+    updateJob(90, "회의록 문서를 구글 문서에 최종 저장하고 있어요...");
 
     const requests = [
       {
@@ -707,7 +708,7 @@ async function processAudioJob(
     if (job) {
       job.status = "completed";
       job.progress = 100;
-      job.message = "회의록 작성이 완료되었습니다!";
+      job.message = "회의록을 완성했어요!";
       job.result = {
         documentId: documentId,
         documentUrl: documentUrl,
@@ -727,8 +728,8 @@ async function processAudioJob(
     const job = jobs.get(jobId);
     if (job) {
       job.status = "failed";
-      job.error = isAuthError ? "구글 로그인 세션이 만료되었습니다. 다시 로그인해 주세요." : (err.message || "회의록 분석 중 알 수 없는 에러가 발생했습니다.");
-      job.message = "회의록 자동 도출 및 구글 연동 중 에러가 발생했습니다.";
+      job.error = isAuthError ? "구글 로그인 세션이 만료되었어요. 다시 로그인해주세요." : (err.message || "회의록 분석 중 에러가 발생했어요.");
+      job.message = "회의록을 생성하는 중 문제가 발생했어요.";
     }
   } finally {
     if (uploadedGenAIFile) {
@@ -839,7 +840,7 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
   let mimetype = "audio/webm";
 
   // Check if we are doing a chunked-upload process call
-  const { uploadId } = req.body;
+  const { uploadId, mimeType: customMimeType, fileName: customFileName } = req.body;
   if (uploadId) {
     const safeUploadId = uploadId.replace(/[^a-zA-Z0-9_-]/g, "");
     tempFilePath = path.join(os.tmpdir(), `upload_assembled_${safeUploadId}.webm`);
@@ -849,6 +850,12 @@ app.post("/api/meetings/process", upload.single("audio"), async (req: Request, r
     }
     const stats = fs.statSync(tempFilePath);
     fileSize = stats.size;
+    if (customFileName) {
+      originalName = customFileName;
+    }
+    if (customMimeType) {
+      mimetype = customMimeType;
+    }
   } else {
     // Standard direct file upload fallback
     const audioFile = req.file;
