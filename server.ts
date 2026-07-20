@@ -279,41 +279,19 @@ async function processAudioJob(
       attempts++;
     }
 
-    updateJob(45, "음성 파일을 텍스트로 정밀하게 받아적고 구조화된 안건을 도출하는 중입니다...");
+    updateJob(45, "음성 파일에서 화자를 식별하며 전사 녹취 스크립트(STT)를 정밀 복원 중입니다...");
 
-    // Prepare structure-driven prompt with JSON response requirement
-    const systemPrompt = `당신은 스타트업 및 IT 프로덕트 개발 회의의 전사 스크립트를 분석하여, 실행 중심의 고도로 구조화된 '수석 비즈니스 회의록'을 작성하는 전문 비서이자 비즈니스 라이터입니다.
-제공된 한국어 음성 데이터를 정밀 분석하고, 회의의 맥락, 결정된 사항의 인과관계, 그리고 즉시 실행 가능한 액션 아이템(To-Do)이 명확히 드러나는 최고급 비즈니스 회의록을 생성해 주십시오.
+    // 1단계: 고정밀 무손실 전사(STT) 수행 (Plain Text 출력으로 JSON 파싱 실패 차단 및 무손실 전사 보장)
+    const transcribingPrompt = `당신은 최고 성능의 한국어 음성 전사(STT) 엔진이자 전문 비서입니다.
+제공된 오디오의 음성 데이터를 듣고 대화 내용을 단 한 글자도 누락, 왜곡, 축소 또는 임의 생략("중략", "..." 등)하지 말고 100% 빠짐없이 그대로 받아적으십시오.
 
-[작성 가이드라인]
-1. 논의사항과 결정사항의 분리:
-   - "discussion"(주요 논의사항)에는 아이디어가 오간 과정, 겪고 있는 문제점, 기술적 한계나 예외 상황 등의 '맥락'을 풍부하게 서술하십시오. (예: 어떤 배경에서 이슈가 발생했으며, 참석자 간에 어떤 의견이 대립하거나 개진되었는지 상세 서술)
-   - "decision"(결정사항)에는 논의 끝에 최종적으로 합의된 결론만 명확하고 간결하게 요약하십시오.
-2. 구체적인 액션 아이템(Todo Lists) 도출:
-   - '누가(담당자)', '무엇을(작업 내용)', '언제까지(기한)' 해야 하는지 명확히 매핑하십시오.
-   - 대화 중에서 언급된 날짜나 요일(예: "다음 주 월요일", "수요일 런칭")을 회의 일자 및 현재 날짜를 기준으로 역산하여 구체적인 날짜(YYYY-MM-DD)로 변환하여 기입하십시오. 기한이 명시되지 않았다면 'TBD(추후 확정)' 또는 맥락상 유추 가능한 일정을 적으십시오.
-3. 문체 및 톤앤매너:
-   - 전문적이고 신뢰감 있는 비즈니스 격식체(존칭 및 명사형 종결 어미 혼용)를 사용하십시오.
-   - 불필요한 구어체나 감정적 표현은 배제하고, 객관적 사실과 실행 위주로 정리하십시오.
-4. 원본 데이터의 보존:
-   - 회의 데이터 내의 날짜, 인명, 수치, 핵심 팩트를 왜곡, 축소, 임의 생략하지 말고 완벽히 기재하십시오.
+[지침]
+1. 음성 내 대화자의 목소리 톤과 어조를 구별하여 화자를 구분 및 표기하십시오. 만약 실명이 파악된다면 이름으로 표기하고, 파악되지 않는다면 목소리를 구별하여 "참여자 1", "참여자 2..." 등으로 일관성 있게 식별하십시오.
+2. 참석자별 발언이 바뀔 때마다 반드시 줄바꿈과 함께 문단 분리(빈 줄 하나 추가, 즉 \\n\\n)를 적용해 가독성을 극대화하여 출력하십시오.
+3. 구어체의 뉘앙스와 말소리를 정교하게 복원하십시오.
+4. 출력은 어떠한 부가 설명, 서론, 결론 또는 마크다운 코드 블록(예: \`\`\`) 없이 오직 순수한 전사 텍스트 결과물만 반환하십시오.`;
 
-제공된 한국어 음성 파일을 바탕으로 분석한 뒤, 다음 필드를 포함하는 완벽한 JSON 형식으로 회의록을 도출해 주세요. JSON 이외의 설명이나 구분 기호, 코드 블록 마크다운은 배제하고 순수한 JSON 데이터만 제공하세요.
-
-객체 필드:
-- "title": 회의의 주요 명제 및 주제를 논의 상태에 맞추어 명쾌하게 뽑아낸 수석 비즈니스 회의록 보고서 제목 (예: "단위 변환 기능 및 1차 출시 일정 조율 회의")
-- "date": 회의 발생 일자 (YYYY-MM-DD 형식으로 분석하여 기입, 음성에서 유추 불가하거나 언급이 없다면 오늘 날짜인 ${creationDateStr} 기입)
-- "attendees": 참석자 이름 목록 (음성 내 대화자 및 화자를 분석하여 실명 매핑된 참석자 이름의 배열)
-- "agenda": 이번 회의에서 다루어진 핵심 안건들을 몇 가지 핵심 키워드로 요약한 리스트
-- "discussion": 논의 배경, 발생한 이슈, 기술적 한계, 참석자 간의 다양한 의견(누가 어떤 발언을 했는지)을 맥락 중심으로 상세히 서술한 리스트
-- "decision": 논의 끝에 최종적으로 결정된 사안을 깔끔하게 요약한 리스트
-- "todo": 향후 각 담당자가 기한 내 처리해야 할 액션 아이템 리스트. 각각 "task"(할 일 내용 - 구체적으로 상세히 기술), "assignee"(담당자 실명, 명확하지 않으면 '미지정'), "dueDate"(YYYY-MM-DD 형식의 구체적 날짜 또는 일정 정보, 명확하지 않으면 'TBD')를 포함하는 객체 배열.
-- "transcript": 음성 파일 전체에 대한 상세 전사(녹취) 스크립트. 모든 말소리를 누락과 곡해 없이 한글 구어체 뉘앙스를 고스란히 정교하게 적은 실제 대화 내용입니다. [🚨 소실 방지 및 가독성 극대화 지침]
-  1. 절대로 스크립트를 임의로 요약하거나, 생략("중략", "..." 등)하거나 축약하지 마십시오. 40분 이상의 긴 녹음 분량일지라도 실제 음성 파일에 존재하는 대화를 처음부터 끝까지 100% 빠짐없이 완벽하게 전사해 주십시오.
-  2. 참석자별 발언이 바뀔 때마다 반드시 줄바꿈을 적용하고, 화자 구분 세그먼트 사이에 빈 줄을 두어(즉, 각 발화는 문단 분리 \\n\\n를 적용해) 가독성을 극대화하여 출력하십시오. 예: "화자이름: 발언내용...\\n\\n화자이름2: 발언내용..." 형태로 줄바꿈을 완벽히 복원해 주십시오.
-  3. 화자명이 식별된다면 실명으로 매핑하고, 식별되지 않는다면 대화자 목소리 톤을 구별하여 "참여자 1", "참여자 2..." 등으로 일목요연하고 연속적으로 전사해야 합니다.`;
-
-    const modelResponse = await generateContentWithRetry(aiClient, {
+    const transcriptionResponse = await generateContentWithRetry(aiClient, {
       model: "gemini-3.5-flash",
       contents: [
         {
@@ -322,10 +300,44 @@ async function processAudioJob(
             mimeType: uploadedGenAIFile.mimeType
           }
         },
-        systemPrompt
+        transcribingPrompt
+      ]
+    });
+
+    const rawTranscript = transcriptionResponse.text;
+    console.log("[STT Engine] Completed high-fidelity transcription. Length:", rawTranscript ? rawTranscript.length : 0);
+
+    if (!rawTranscript || rawTranscript.trim().length === 0) {
+      throw new Error("음성 파일 전사(STT) 결과물이 비어있거나 생성에 실패했습니다.");
+    }
+
+    updateJob(55, "전사된 텍스트를 고도 분석하여 주요 안건, 결정사항 및 실행 과제(To-Do)를 도출하고 있습니다...");
+
+    // 2단계: 텍스트 기반 수석 비즈니스 회의록 자동 요약 및 구조화 (비용이 저렴한 텍스트 입력으로 API 호출, 출력 JSON에서 대형 transcript를 제외하여 토큰 절감 및 잘림 붕괴 원천 차단)
+    const summaryPrompt = `당신은 IT 프로덕트 개발 및 비즈니스 회의록 분석 전문가입니다. 제공된 회의 전사 스크립트를 정밀 분석하여, 실행 중심의 고도로 구조화된 '수석 비즈니스 회의록'을 생성해 주십시오.
+
+[작성 가이드라인]
+1. "title": 회의 주제를 명쾌하게 요약해 낸 회의록 보고서 제목
+2. "date": 회의 발생 일자 (YYYY-MM-DD 형식, 전사에서 유추할 수 없다면 오늘 날짜인 ${creationDateStr} 기입)
+3. "attendees": 참석자 실명 배열 (전사 기록을 분석하여 매핑)
+4. "agenda": 회의 핵심 안건 리스트
+5. "discussion": 논의 배경, 발생한 이슈, 한계, 참석자 의견 개진 등의 '상세 맥락'을 상세히 서술한 리스트 (각 항목은 구체적으로 작성)
+6. "decision": 최종 합의되거나 결정된 핵심 결론 리스트
+7. "todo": 각 담당자가 처리해야 할 실행 아이템 리스트. 각 객체는 다음 필드를 필수 포함해야 합니다:
+   - "task": 구체적이고 상세한 할 일 내용
+   - "assignee": 담당자 실명 (명확하지 않으면 '미지정')
+   - "dueDate": 구체적인 기한 (YYYY-MM-DD 형식 또는 맥락상 유추 일정 기입, 알 수 없으면 'TBD')
+
+반드시 다음 JSON 형식에 정확히 맞춰 순수한 JSON 데이터만 반환하십시오. 앞뒤 설명이나 마크다운 코드 블록 등 JSON이 아닌 문자열은 절대 출력하지 마십시오.`;
+
+    const summaryResponse = await generateContentWithRetry(aiClient, {
+      model: "gemini-3.5-flash",
+      contents: [
+        { text: `회의 전사 스크립트 원본:\n\n${rawTranscript}` },
+        summaryPrompt
       ],
       config: {
-        maxOutputTokens: 8192,
+        maxOutputTokens: 4096,
         responseMimeType: "application/json",
         responseSchema: {
           type: "OBJECT",
@@ -359,19 +371,18 @@ async function processAudioJob(
                 },
                 required: ["task", "assignee", "dueDate"]
               }
-            },
-            transcript: { type: "STRING" }
+            }
           },
-          required: ["title", "date", "attendees", "agenda", "discussion", "decision", "todo", "transcript"]
+          required: ["title", "date", "attendees", "agenda", "discussion", "decision", "todo"]
         }
       }
     });
 
-    const outputText = modelResponse.text;
-    console.log("Raw response from Gemini Model:", outputText);
+    const outputText = summaryResponse.text;
+    console.log("[Summarizer] Raw response from Gemini Model:", outputText);
 
     if (!outputText) {
-      throw new Error("Gemini 모델로부터 응답 텍스트를 받지 못했습니다.");
+      throw new Error("Gemini 모델로부터 회의록 요약 분석 결과를 받지 못했습니다.");
     }
 
     updateJob(65, "AI 회의록 분석 및 가공 결과를 수집하여 표준 규격으로 구조화하는 중입니다...");
@@ -396,6 +407,7 @@ async function processAudioJob(
       return [];
     };
 
+    // 3단계: 무손실 전사 텍스트와 구조화된 보고서를 병합 (Split-and-Merge의 완성)
     const structuredNotes = {
       title: structuredNotesRaw.title || "AI 회의록 보고서",
       date: structuredNotesRaw.date || creationDateStr || new Date().toISOString().split('T')[0],
@@ -404,7 +416,7 @@ async function processAudioJob(
       discussion: ensureArray(structuredNotesRaw.discussion),
       decision: ensureArray(structuredNotesRaw.decision),
       todo: Array.isArray(structuredNotesRaw.todo) ? structuredNotesRaw.todo : [],
-      transcript: structuredNotesRaw.transcript || ""
+      transcript: rawTranscript // 1단계에서 확보한 100% 무손실 전사본 결합
     };
 
     console.log("Normalized Structured Meeting Notes prepared successfully:", structuredNotes);
