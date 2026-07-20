@@ -1436,7 +1436,7 @@ export default function App() {
                       <div className="text-left">
                         <h3 className="text-sm font-bold text-indigo-950 flex items-center gap-1.5 border-b border-indigo-50 pb-2 mb-3">
                           <span className="w-1.5 h-3.5 bg-indigo-600 rounded-sm inline-block"></span>
-                          안건 (Agenda)
+                          1. 회의 안건
                         </h3>
                         <ul className="space-y-2 pl-1.5">
                           {minutesResult.agenda && minutesResult.agenda.length > 0 ? (
@@ -1456,7 +1456,7 @@ export default function App() {
                       <div className="text-left">
                         <h3 className="text-sm font-bold text-indigo-950 flex items-center gap-1.5 border-b border-indigo-50 pb-2 mb-3">
                           <span className="w-1.5 h-3.5 bg-indigo-600 rounded-sm inline-block"></span>
-                          중요 논의사항 (Discussion)
+                          2. 주요 논의사항
                         </h3>
                         <ul className="space-y-2 pl-1.5">
                           {minutesResult.discussion && minutesResult.discussion.length > 0 ? (
@@ -1476,7 +1476,7 @@ export default function App() {
                       <div className="text-left">
                         <h3 className="text-sm font-bold text-indigo-950 flex items-center gap-1.5 border-b border-indigo-50 pb-2 mb-3">
                           <span className="w-1.5 h-3.5 bg-indigo-600 rounded-sm inline-block"></span>
-                          합의 및 결정사항 (Decision)
+                          3. 결정사항
                         </h3>
                         <div className="bg-indigo-50/20 border border-indigo-100/60 rounded-2xl p-4 space-y-2.5">
                           {minutesResult.decision && minutesResult.decision.length > 0 ? (
@@ -1498,7 +1498,7 @@ export default function App() {
                       <div className="text-left">
                         <h3 className="text-sm font-bold text-indigo-950 flex items-center gap-1.5 border-b border-indigo-50 pb-2 mb-4">
                           <span className="w-1.5 h-3.5 bg-indigo-600 rounded-sm inline-block"></span>
-                          향후 구성원별 할 일 (Action Items)
+                          4. 향후 할 일
                         </h3>
                         {minutesResult.todo && minutesResult.todo.length > 0 ? (
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
@@ -1528,7 +1528,7 @@ export default function App() {
                       <div className="text-left">
                         <h3 className="text-sm font-bold text-indigo-950 flex items-center gap-1.5 border-b border-indigo-50 pb-2 mb-4">
                           <span className="w-1.5 h-3.5 bg-indigo-600 rounded-sm inline-block"></span>
-                          🗣️ 실시간 전사 녹취록 (Full Transcript)
+                          전사 녹취 스크립트
                         </h3>
                         {minutesResult.transcript ? (
                           <div className="bg-slate-50 border border-slate-100/80 rounded-2xl p-4.5 max-h-[300px] overflow-y-auto whitespace-pre-wrap text-xs text-slate-600 leading-relaxed font-medium font-sans max-w-full">

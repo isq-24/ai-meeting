@@ -519,25 +519,20 @@ async function processAudioJob(
       throw new Error("Google Docs 생성 과정에서 파일 ID를 획득하지 못했습니다.");
     }
 
-    const attendeesList = structuredNotes.attendees && structuredNotes.attendees.length > 0
-      ? structuredNotes.attendees.join(", ")
-      : "미지정";
+    const formatAgenda = hasAgenda ? structuredNotes.agenda.join("\n") + "\n" : "등록된 안건이 없습니다.\n";
 
-    const formatAgenda = structuredNotes.agenda.map((a: string) => `* ${a}`).join("\n");
-    const formatDiscussion = structuredNotes.discussion.map((d: string) => `* ${d}`).join("\n");
-    const formatDecision = structuredNotes.decision.map((de: string) => `* ${de}`).join("\n");
-    
-    // Construct the Todo Markdown table
-    let formatTodo = "| 작업 내용 | 담당자 | 기한 |\n| :--- | :--- | :--- |\n";
-    if (structuredNotes.todo && structuredNotes.todo.length > 0) {
-      formatTodo += structuredNotes.todo.map((t: any) => 
-        `| ${t.task} | ${t.assignee || "미지정"} | ${t.dueDate || "TBD"} |`
-      ).join("\n");
-    } else {
-      formatTodo += "| 지정된 할 일이 없습니다. | - | - |";
-    }
+    const hasDiscussion = structuredNotes.discussion && structuredNotes.discussion.length > 0;
+    const formatDiscussion = hasDiscussion ? structuredNotes.discussion.join("\n") + "\n" : "등록된 논의사항이 없습니다.\n";
 
-    const segments: { text: string; style?: "HEADING_1" | "HEADING_2" | "NORMAL_TEXT"; pageBreakBefore?: boolean }[] = [];
+    const hasDecision = structuredNotes.decision && structuredNotes.decision.length > 0;
+    const formatDecision = hasDecision ? structuredNotes.decision.join("\n") + "\n" : "등록된 결정사항이 없습니다.\n";
+
+    const segments: {
+      text: string;
+      style?: "HEADING_1" | "HEADING_2" | "NORMAL_TEXT";
+      pageBreakBefore?: boolean;
+      bullet?: boolean;
+    }[] = [];
 
     segments.push({
       text: `📝 ${structuredNotes.title || "AI 회의록 자동 생성 보고서"}\n`,
@@ -545,7 +540,7 @@ async function processAudioJob(
     });
 
     segments.push({
-      text: `📅 회의 일자: ${structuredNotes.date || creationDateStr}\n👥 참석자: ${attendeesList}\n`,
+      text: `📅 회의 일자: ${structuredNotes.date || creationDateStr}\n`,
       style: "NORMAL_TEXT"
     });
 
@@ -555,44 +550,59 @@ async function processAudioJob(
     });
 
     segments.push({
-      text: `### 1. 회의 안건 (Agenda)\n`,
+      text: `1. 회의 안건\n`,
       style: "HEADING_2"
     });
     segments.push({
-      text: `${formatAgenda || "* 등록된 안건이 없습니다."}\n\n`,
+      text: formatAgenda,
+      style: "NORMAL_TEXT",
+      bullet: hasAgenda
+    });
+    segments.push({
+      text: `\n`,
       style: "NORMAL_TEXT"
     });
 
     segments.push({
-      text: `### 2. 주요 논의사항 (Discussion)\n`,
+      text: `2. 주요 논의사항\n`,
       style: "HEADING_2"
     });
     segments.push({
-      text: `${formatDiscussion || "* 등록된 논의사항이 없습니다."}\n\n`,
+      text: formatDiscussion,
+      style: "NORMAL_TEXT",
+      bullet: hasDiscussion
+    });
+    segments.push({
+      text: `\n`,
       style: "NORMAL_TEXT"
     });
 
     segments.push({
-      text: `### 3. 결정사항 (Decision)\n`,
+      text: `3. 결정사항\n`,
       style: "HEADING_2"
     });
     segments.push({
-      text: `${formatDecision || "* 등록된 결정사항이 없습니다."}\n\n`,
+      text: formatDecision,
+      style: "NORMAL_TEXT",
+      bullet: hasDecision
+    });
+    segments.push({
+      text: `\n`,
       style: "NORMAL_TEXT"
     });
 
     segments.push({
-      text: `### 4. 향후 할 일 및 후속 조치 (Todo Lists)\n`,
+      text: `4. 향후 할 일\n`,
       style: "HEADING_2"
     });
     segments.push({
-      text: `${formatTodo}\n\n`,
+      text: `{{TODO_TABLE}}\n\n`,
       style: "NORMAL_TEXT"
     });
 
     if (audioFileUrlOnDrive) {
       segments.push({
-        text: `5. 회의 원본 녹음 링크 (Original Voice Recording)\n`,
+        text: `5. 회의 원본 녹음 링크\n`,
         style: "HEADING_2"
       });
       segments.push({
@@ -607,7 +617,7 @@ async function processAudioJob(
     });
 
     segments.push({
-      text: `🗣️ 전사 녹취 스크립트 (Full Transcript Appendix)\n`,
+      text: `전사 녹취 스크립트\n`,
       style: "HEADING_1",
       pageBreakBefore: true
     });
@@ -658,6 +668,18 @@ async function processAudioJob(
         });
       }
 
+      if (seg.bullet) {
+        styleRequests.push({
+          createParagraphBullet: {
+            range: {
+              startIndex: start,
+              endIndex: end
+            },
+            bulletPreset: "BULLET_DISC_CIRCLE_SQUARE"
+          }
+        });
+      }
+
       fullText += seg.text;
       currentPos += textLen;
     }
@@ -682,6 +704,7 @@ async function processAudioJob(
       });
     }
 
+    // Step 1: Insert base text and apply paragraph/bullet styles
     const updateDocsRes = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
       method: "POST",
       headers: {
@@ -693,9 +716,170 @@ async function processAudioJob(
 
     if (!updateDocsRes.ok) {
       const errText = await updateDocsRes.text();
-      console.error("Docs text insertion failed. The empty Doc remains.", errText);
+      console.error("Docs text insertion failed.", errText);
     } else {
-      console.log("Docs content batchUpdate successful!");
+      console.log("Docs base text insertion successful!");
+
+      // Step 2: Fetch the document to find the {{TODO_TABLE}} placeholder index
+      try {
+        const getDocRes = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}`, {
+          headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        if (getDocRes.ok) {
+          const docObj = await getDocRes.json();
+          let placeholderIndex = -1;
+          for (const element of docObj.body.content) {
+            if (element.paragraph && element.paragraph.elements) {
+              for (const pe of element.paragraph.elements) {
+                if (pe.textRun && pe.textRun.content) {
+                  const idx = pe.textRun.content.indexOf("{{TODO_TABLE}}");
+                  if (idx !== -1) {
+                    placeholderIndex = pe.startIndex + idx;
+                    break;
+                  }
+                }
+              }
+            }
+            if (placeholderIndex !== -1) break;
+          }
+
+          if (placeholderIndex !== -1) {
+            console.log(`Found {{TODO_TABLE}} placeholder at index ${placeholderIndex}`);
+            const todoList = structuredNotes.todo || [];
+            const numRows = todoList.length > 0 ? todoList.length + 1 : 2; // 1 header + N todo rows (or 1 header + 1 empty row)
+
+            const tableRequests = [
+              {
+                deleteContentRange: {
+                  range: {
+                    startIndex: placeholderIndex,
+                    endIndex: placeholderIndex + 14 // "{{TODO_TABLE}}" is 14 chars
+                  }
+                }
+              },
+              {
+                insertTable: {
+                  rows: numRows,
+                  columns: 3,
+                  location: {
+                    index: placeholderIndex
+                  }
+                }
+              }
+            ];
+
+            // Step 3: Insert the empty table
+            const updateTableRes = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ requests: tableRequests }),
+            });
+
+            if (!updateTableRes.ok) {
+              const errText = await updateTableRes.text();
+              console.error("Failed to insert empty table:", errText);
+            } else {
+              console.log("Empty table inserted successfully!");
+
+              // Step 4: Fetch the document again to get the table's updated cell indices
+              const getDocRes2 = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}`, {
+                headers: { Authorization: `Bearer ${accessToken}` }
+              });
+              if (getDocRes2.ok) {
+                const docObj2 = await getDocRes2.json();
+                let targetTable = null;
+                for (const element of docObj2.body.content) {
+                  if (element.table) {
+                    targetTable = element.table;
+                    break;
+                  }
+                }
+
+                if (targetTable) {
+                  console.log("Found table in document content. Preparing cell updates...");
+                  const cellsToUpdate: { index: number; text: string }[] = [];
+
+                  // Populate header row cells
+                  const headerTexts = ["작업 내용", "담당자", "기한"];
+                  const headerRow = targetTable.tableRows[0];
+                  for (let c = 0; c < 3; c++) {
+                    const cell = headerRow.tableCells[c];
+                    if (cell && cell.content && cell.content[0] && cell.content[0].paragraph && cell.content[0].paragraph.elements && cell.content[0].paragraph.elements[0]) {
+                      cellsToUpdate.push({
+                        index: cell.content[0].paragraph.elements[0].startIndex,
+                        text: headerTexts[c]
+                      });
+                    }
+                  }
+
+                  // Populate task rows cells (leaving "담당자" and "기한" blank as requested)
+                  if (todoList.length > 0) {
+                    for (let r = 0; r < todoList.length; r++) {
+                      const taskRow = targetTable.tableRows[r + 1];
+                      if (taskRow) {
+                        const cell = taskRow.tableCells[0]; // Col 0 is "작업 내용"
+                        if (cell && cell.content && cell.content[0] && cell.content[0].paragraph && cell.content[0].paragraph.elements && cell.content[0].paragraph.elements[0]) {
+                          cellsToUpdate.push({
+                            index: cell.content[0].paragraph.elements[0].startIndex,
+                            text: todoList[r].task || "미지정"
+                          });
+                        }
+                      }
+                    }
+                  } else {
+                    const emptyRow = targetTable.tableRows[1];
+                    if (emptyRow) {
+                      const cell = emptyRow.tableCells[0];
+                      if (cell && cell.content && cell.content[0] && cell.content[0].paragraph && cell.content[0].paragraph.elements && cell.content[0].paragraph.elements[0]) {
+                        cellsToUpdate.push({
+                          index: cell.content[0].paragraph.elements[0].startIndex,
+                          text: "지정된 할 일이 없습니다."
+                        });
+                      }
+                    }
+                  }
+
+                  // Sort descending by index to avoid shift conflicts on sequential insert
+                  cellsToUpdate.sort((a, b) => b.index - a.index);
+
+                  const cellInsertRequests = cellsToUpdate.map(cell => ({
+                    insertText: {
+                      text: cell.text,
+                      location: {
+                        index: cell.index
+                      }
+                    }
+                  }));
+
+                  // Step 5: Batch update the table cells
+                  if (cellInsertRequests.length > 0) {
+                    const updateCellsRes = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
+                      method: "POST",
+                      headers: {
+                        Authorization: `Bearer ${accessToken}`,
+                        "Content-Type": "application/json",
+                      },
+                      body: JSON.stringify({ requests: cellInsertRequests }),
+                    });
+
+                    if (!updateCellsRes.ok) {
+                      const errText = await updateCellsRes.text();
+                      console.error("Failed to populate table cells:", errText);
+                    } else {
+                      console.log("Table cells populated successfully!");
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (tableErr) {
+        console.error("Error during table structure processing:", tableErr);
+      }
     }
 
     const getFileMeta = await fetch(`https://www.googleapis.com/drive/v3/files/${documentId}?fields=webViewLink&supportsAllDrives=true`, {
