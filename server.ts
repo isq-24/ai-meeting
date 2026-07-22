@@ -118,8 +118,8 @@ const jobs = new Map<string, JobState>();
 
 // Helper function to handle Google GenAI model calls with robust exponential backoff retry for transient errors (e.g., 503 unavailable)
 async function generateContentWithRetry(aiClient: any, params: any, maxRetries = 3, initialDelay = 2000): Promise<any> {
-  const initialModel = params.model || "gemini-3.5-flash";
-  const fallbackModels = ["gemini-3.5-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
+  const initialModel = params.model || "gemini-3.6-flash";
+  const fallbackModels = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"];
   // Filter out the initialModel so we can try it first, then try the others in order
   const modelOrder = [initialModel, ...fallbackModels.filter(m => m !== initialModel)];
 
@@ -183,6 +183,109 @@ async function generateContentWithRetry(aiClient: any, params: any, maxRetries =
   }
   
   throw new Error("All candidate Gemini models are currently experiencing high demand. Please try again later.");
+}
+
+// Helper to repair truncated or poorly escaped JSON from Gemini
+function repairJson(str: string): any {
+  let cleaned = str.trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+  }
+
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    console.warn("[JSON Repair] Standard parse failed. Running correction parser...");
+  }
+
+  let inString = false;
+  let escape = false;
+  let stack: string[] = [];
+  let cleanStr = "";
+
+  for (let i = 0; i < cleaned.length; i++) {
+    const char = cleaned[i];
+    if (escape) {
+      cleanStr += char;
+      escape = false;
+      continue;
+    }
+    if (char === "\\") {
+      cleanStr += char;
+      escape = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      cleanStr += char;
+      continue;
+    }
+    if (inString) {
+      if (char === "\n") {
+        cleanStr += "\\n";
+      } else if (char === "\r") {
+        cleanStr += "\\r";
+      } else if (char === "\t") {
+        cleanStr += "\\t";
+      } else {
+        cleanStr += char;
+      }
+      continue;
+    }
+
+    if (char === "{" || char === "[") {
+      stack.push(char);
+    } else if (char === "}" || char === "]") {
+      const top = stack[stack.length - 1];
+      if ((char === "}" && top === "{") || (char === "]" && top === "[")) {
+        stack.pop();
+      }
+    }
+    cleanStr += char;
+  }
+
+  if (inString) {
+    cleanStr += '"';
+  }
+
+  cleanStr = cleanStr.trim();
+
+  while (true) {
+    let changed = false;
+    if (cleanStr.endsWith(",")) {
+      cleanStr = cleanStr.slice(0, -1).trim();
+      changed = true;
+    }
+    const lastBrace = Math.max(cleanStr.lastIndexOf("{"), cleanStr.lastIndexOf("["));
+    const lastComma = cleanStr.lastIndexOf(",");
+    const cutPoint = Math.max(lastBrace, lastComma);
+    
+    const trailing = cleanStr.substring(cutPoint + 1).trim();
+    if (trailing && !trailing.endsWith("}") && !trailing.endsWith("]") && !trailing.endsWith('"') && !/^\d+$/.test(trailing) && trailing !== "true" && trailing !== "false" && trailing !== "null") {
+      cleanStr = cleanStr.substring(0, cutPoint).trim();
+      if (cutPoint === lastBrace && lastBrace !== -1) {
+        stack.pop();
+      }
+      changed = true;
+    }
+    if (!changed) break;
+  }
+
+  while (stack.length > 0) {
+    const top = stack.pop();
+    if (top === "{") {
+      cleanStr += "}";
+    } else if (top === "[") {
+      cleanStr += "]";
+    }
+  }
+
+  try {
+    return JSON.parse(cleanStr);
+  } catch (finalErr) {
+    console.error("[JSON Repair] Failed to repair JSON:", finalErr);
+    throw finalErr;
+  }
 }
 
 // Async background processing worker to handle Gemini API & Google Drive syncing
@@ -292,7 +395,7 @@ async function processAudioJob(
 4. 출력은 어떠한 부가 설명, 서론, 결론 또는 마크다운 코드 블록(예: \`\`\`) 없이 오직 순수한 전사 텍스트 결과물만 반환하십시오.`;
 
     const transcriptionResponse = await generateContentWithRetry(aiClient, {
-      model: "gemini-3.5-flash",
+      model: "gemini-3.6-flash",
       contents: [
         {
           fileData: {
@@ -331,13 +434,13 @@ async function processAudioJob(
 반드시 다음 JSON 형식에 정확히 맞춰 순수한 JSON 데이터만 반환하십시오. 앞뒤 설명이나 마크다운 코드 블록 등 JSON이 아닌 문자열은 절대 출력하지 마십시오.`;
 
     const summaryResponse = await generateContentWithRetry(aiClient, {
-      model: "gemini-3.5-flash",
+      model: "gemini-3.6-flash",
       contents: [
         { text: `회의 전사 스크립트 원본:\n\n${rawTranscript}` },
         summaryPrompt
       ],
       config: {
-        maxOutputTokens: 4096,
+        maxOutputTokens: 8192,
         responseMimeType: "application/json",
         responseSchema: {
           type: "OBJECT",
@@ -388,17 +491,7 @@ async function processAudioJob(
     updateJob(65, "회의록 내용을 수집해서 보기 좋게 정리하고 있어요...");
 
     // Clean or Parse Gemini response
-    let structuredNotesRaw: any;
-    try {
-      structuredNotesRaw = JSON.parse(outputText.trim());
-    } catch (parseErr) {
-      console.warn("JSON direct parse failed. Attempting cleanup...", parseErr);
-      const cleanedText = outputText
-        .replace(/```json/gi, "")
-        .replace(/```/g, "")
-        .trim();
-      structuredNotesRaw = JSON.parse(cleanedText);
-    }
+    const structuredNotesRaw = repairJson(outputText);
 
     const ensureArray = (val: any): string[] => {
       if (!val) return [];
@@ -519,6 +612,7 @@ async function processAudioJob(
       throw new Error("Google Docs 생성 과정에서 파일 ID를 획득하지 못했습니다.");
     }
 
+    const hasAgenda = structuredNotes.agenda && structuredNotes.agenda.length > 0;
     const formatAgenda = hasAgenda ? structuredNotes.agenda.join("\n") + "\n" : "등록된 안건이 없습니다.\n";
 
     const hasDiscussion = structuredNotes.discussion && structuredNotes.discussion.length > 0;
@@ -686,39 +780,66 @@ async function processAudioJob(
 
     updateJob(90, "회의록 문서를 구글 문서에 최종 저장하고 있어요...");
 
-    const requests = [
+    const insertTextRequests = [
       {
         insertText: {
           text: fullText,
           location: { index: 1 }
         }
-      },
-      ...styleRequests
+      }
     ];
 
-    if (transcriptIndexInFullText !== -1) {
-      requests.push({
-        insertPageBreak: {
-          location: { index: transcriptIndexInFullText }
-        }
-      });
-    }
-
-    // Step 1: Insert base text and apply paragraph/bullet styles
+    // Step 1: Insert base text
     const updateDocsRes = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ requests }),
+      body: JSON.stringify({ requests: insertTextRequests }),
     });
 
     if (!updateDocsRes.ok) {
       const errText = await updateDocsRes.text();
       console.error("Docs text insertion failed.", errText);
+      if (errText.includes("insufficient") || errText.includes("permission") || updateDocsRes.status === 403) {
+        throw new Error("구글 문서 쓰기 및 스타일 편집 권한이 부족합니다. 화면 우측 상단의 로그아웃 버튼을 눌러 로그아웃 하신 뒤, 다시 로그인하여 구글 드라이브 및 문서 쓰기 권한을 승인해주세요.");
+      }
+      throw new Error(`Google Docs 텍스트 입력에 실패했습니다: ${errText}`);
     } else {
       console.log("Docs base text insertion successful!");
+
+      // Step 1.5: Apply paragraph/bullet styles and insert page break in a second batch update
+      const stylePayloadRequests = [...styleRequests];
+      if (transcriptIndexInFullText !== -1) {
+        stylePayloadRequests.push({
+          insertPageBreak: {
+            location: { index: transcriptIndexInFullText }
+          }
+        });
+      }
+
+      if (stylePayloadRequests.length > 0) {
+        const updateStylesRes = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ requests: stylePayloadRequests }),
+        });
+
+        if (!updateStylesRes.ok) {
+          const errText = await updateStylesRes.text();
+          console.error("Failed to apply paragraph styles:", errText);
+          if (errText.includes("insufficient") || errText.includes("permission") || updateStylesRes.status === 403) {
+            throw new Error("구글 문서 스타일 설정 권한이 부족합니다. 화면 우측 상단의 로그아웃 버튼을 눌러 로그아웃 하신 뒤, 다시 로그인하여 모든 권한을 승인해주세요.");
+          }
+          throw new Error(`Google Docs 스타일 적용에 실패했습니다: ${errText}`);
+        } else {
+          console.log("Docs styles applied successfully!");
+        }
+      }
 
       // Step 2: Fetch the document to find the {{TODO_TABLE}} placeholder index
       try {
@@ -781,6 +902,7 @@ async function processAudioJob(
             if (!updateTableRes.ok) {
               const errText = await updateTableRes.text();
               console.error("Failed to insert empty table:", errText);
+              throw new Error(`Google Docs 테이블 형식을 구성하지 못했습니다: ${errText}`);
             } else {
               console.log("Empty table inserted successfully!");
 
@@ -868,6 +990,7 @@ async function processAudioJob(
                     if (!updateCellsRes.ok) {
                       const errText = await updateCellsRes.text();
                       console.error("Failed to populate table cells:", errText);
+                      throw new Error(`Google Docs 테이블에 회의 행동 항목(할 일)들을 입력하지 못했습니다: ${errText}`);
                     } else {
                       console.log("Table cells populated successfully!");
                     }
@@ -877,8 +1000,9 @@ async function processAudioJob(
             }
           }
         }
-      } catch (tableErr) {
+      } catch (tableErr: any) {
         console.error("Error during table structure processing:", tableErr);
+        throw new Error(`Google Docs 할 일 목록 테이블 생성 도중 문제가 발생했습니다: ${tableErr?.message || tableErr}`);
       }
     }
 
